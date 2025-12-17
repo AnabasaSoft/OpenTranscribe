@@ -1,0 +1,26 @@
+# Archivos de Python
+__pycache__/
+*.pyc
+venv/
+.env
+
+# Archivos temporales de la app
+temp_audio.wav
+*.wav
+
+# Carpetas de configuración local (si se crearon ahí)
+.OpenTranscribe/
+
+# WHISPER.CPP - IMPORTANTE
+# Ignoramos los modelos pesados
+whisper.cpp/models/*.bin
+# Ignoramos la carpeta de compilación (build)
+whisper.cpp/build/
+# Ignoramos ejecutables compilados sueltos
+whisper.cpp/main
+whisper.cpp/whisper-cli
+whisper.cpp/server
+
+# Ignoramos archivos de sistema
+.DS_Store
+Thumbs.db
