@@ -6,6 +6,9 @@ on:
       - 'v*' # Se ejecuta cuando subes un tag (ej: v1.0.0)
   workflow_dispatch: # Permite ejecutarlo manualmente desde la pestaña Actions
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
