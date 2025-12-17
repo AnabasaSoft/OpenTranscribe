@@ -1,0 +1,15 @@
+CTkFileDialog==0.3.3
+CTkMessagebox==2.7
+CTkToolTip==0.8
+customtkinter==5.2.2
+darkdetect==0.8.0
+lxml==6.0.2
+numpy==2.2.6
+opencv-python==4.12.0.88
+packaging==25.0
+pillow==12.0.0
+pygame==2.6.1
+python-docx==1.2.0
+tkinterdnd2==0.4.3
+typeguard==4.4.4
+typing_extensions==4.15.0
