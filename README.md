@@ -1,10 +1,8 @@
-
-```markdown
 # OpenTranscribe 🎙️
 
 Una aplicación de escritorio moderna y oscura para transcribir audio a texto utilizando la potencia de Whisper (C++).
 
-![https://github.com/AnabasaSoft/OpenTranscribe/blob/main/Captura.png](Captura.png)
+![Captura de pantalla](https://github.com/AnabasaSoft/OpenTranscribe/blob/main/Captura.png)
 
 ## Características 🚀
 - **Interfaz "Dark Mode"** profesional con CustomTkinter.
@@ -23,17 +21,14 @@ Una aplicación de escritorio moderna y oscura para transcribir audio a texto ut
 
 1. Clona el repositorio:
    ```bash
-   git clone [https://github.com/TU_USUARIO/OpenTranscribe.git](https://github.com/TU_USUARIO/OpenTranscribe.git)
+   git clone https://github.com/TU_USUARIO/OpenTranscribe.git
    cd OpenTranscribe
-
-```
+   ```
 
 2. Instala las dependencias:
-```bash
-pip install -r requirements.txt
-
-```
-
+   ```bash
+   pip install -r requirements.txt
+   ```
 
 3. (Opcional) Compila whisper.cpp si no usas el binario predeterminado.
 
@@ -43,7 +38,6 @@ Ejecuta el archivo principal:
 
 ```bash
 python main.py
-
 ```
 
 La aplicación descargará automáticamente los modelos necesarios en tu carpeta de usuario.
@@ -51,5 +45,3 @@ La aplicación descargará automáticamente los modelos necesarios en tu carpeta
 ## Licencia 📄
 
 MIT License
-
-```
