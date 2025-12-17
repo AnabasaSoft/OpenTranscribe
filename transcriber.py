@@ -1,21 +1,20 @@
 import os
 import subprocess
 import re
-import signal
+import sys
+import shutil
 import urllib.request
 import ssl
-import shutil
-import sys
 
 # ==========================================
 # CONFIGURACIÓN DE RUTAS
 # ==========================================
 USER_HOME = os.path.expanduser("~")
 APP_DIR = os.path.join(USER_HOME, ".OpenTranscribe")
-MODELS_DIR = os.path.join(APP_DIR, "whisper.cpp", "models")
+MODELS_DIR = os.path.join(APP_DIR, "models")
 TEMP_WAV = os.path.join(APP_DIR, "temp_audio.wav")
 
-# Asegurar directorios
+# Solo aseguramos la carpeta de modelos
 os.makedirs(MODELS_DIR, exist_ok=True)
 
 MODEL_URLS = {
@@ -29,50 +28,28 @@ MODEL_URLS = {
 current_process = None
 is_cancelled = False
 
-def find_binary(binary_name):
+def get_whisper_executable():
     """
-    Busca un ejecutable en este orden:
-    1. Si estamos congelados (PyInstaller), en la carpeta temporal.
-    2. En la carpeta local del script (Desarrollo).
-    3. En la carpeta de usuario ~/.OpenTranscribe (Instalación manual).
-    4. En el PATH del sistema (Instalado globalmente).
+    Busca el binario 'whisper-cli' incluido en la aplicación.
     """
-    # 1. Modo PyInstaller (sys._MEIPASS es la carpeta temporal del exe)
+    binary_name = "whisper-cli"
+
+    # 1. Modo PyInstaller (Cuando el usuario final ejecute la app)
     if getattr(sys, 'frozen', False):
         base_path = sys._MEIPASS
-        path = os.path.join(base_path, binary_name)
+        # Busca en la carpeta temporal donde se descomprime el exe
+        path = os.path.join(base_path, "binaries_linux", binary_name)
         if os.path.exists(path): return path
-        # En windows a veces es binary_name.exe
-        if os.path.exists(path + ".exe"): return path + ".exe"
 
-    # 2. Ruta relativa al script (Entorno de desarrollo actual)
+    # 2. Modo Desarrollo (Cuando tú lo ejecutas ahora)
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    # Caso específico para tu estructura actual de whisper
-    if binary_name == "whisper-cli":
-        dev_path = os.path.join(base_dir, "whisper.cpp", "build", "bin", "whisper-cli")
-        if os.path.exists(dev_path): return dev_path
-    else:
-        path = os.path.join(base_dir, binary_name)
-        if os.path.exists(path): return path
-
-    # 3. Carpeta de usuario (Futuro)
-    user_path = os.path.join(APP_DIR, binary_name)
-    if os.path.exists(user_path): return user_path
-
-    # 4. PATH del sistema (Global)
-    system_path = shutil.which(binary_name)
-    if system_path: return system_path
+    dev_path = os.path.join(base_dir, "binaries_linux", binary_name)
+    if os.path.exists(dev_path): return dev_path
 
     return None
 
-def get_whisper_executable():
-    bin_path = find_binary("whisper-cli") # Linux/Mac
-    if not bin_path:
-        bin_path = find_binary("main.exe") # Windows (a veces se llama main.exe)
-    return bin_path
-
 def get_ffmpeg_executable():
-    return find_binary("ffmpeg")
+    return shutil.which("ffmpeg")
 
 def get_model_filename(model_name_ui):
     mapa_modelos = {
@@ -146,13 +123,13 @@ def convert_to_wav(input_path):
 def run_transcription(input_file, model_selection, callback_text, callback_progress, with_timestamps=False, diarize=False):
     global current_process, is_cancelled
 
-    # 1. Buscar binario Whisper
     whisper_bin = get_whisper_executable()
+
+    # Verificación estricta: Si no está el binario, es error crítico
     if not whisper_bin:
-        callback_text("[ERROR CRÍTICO] No se encontró el ejecutable 'whisper-cli'.")
+        callback_text("[ERROR CRÍTICO] No se encontró el archivo 'whisper-cli' interno.\nReinstala la aplicación.")
         return
 
-    # 2. Buscar Modelo
     filename = get_model_filename(model_selection)
     model_path = get_model_path(filename)
     if not os.path.exists(model_path):
@@ -167,6 +144,12 @@ def run_transcription(input_file, model_selection, callback_text, callback_progr
         cmd = [whisper_bin, "-m", model_path, "-f", wav_path, "--language", "auto"]
         if not with_timestamps: cmd.append("--no-timestamps")
         if diarize: cmd.append("--diarize")
+
+        # IMPORTANTE: Asegurar permisos de ejecución al vuelo por si acaso
+        try:
+            st = os.stat(whisper_bin)
+            os.chmod(whisper_bin, st.st_mode | 0o111) # +x
+        except: pass
 
         current_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
         timestamp_pattern = re.compile(r"\[(\d{2}):(\d{2}):(\d{2}\.\d{3})")

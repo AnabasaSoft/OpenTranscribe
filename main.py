@@ -19,6 +19,7 @@ try:
 except ImportError:
     HAS_DOCX = False
     print("Nota: Instala 'python-docx' para exportar a Word.")
+import platform
 
 # Configuración inicial
 ctk.set_appearance_mode("Dark")
@@ -766,24 +767,24 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         ctk.CTkButton(ayuda_window, text="Entendido", command=ayuda_window.destroy, width=100).pack(pady=20)
 
     def check_system_requirements(self):
-        """Verifica que FFMPEG y Whisper existan"""
+        """Verifica dependencias del sistema"""
         missing = []
 
-        # Verificar FFMPEG
+        # 1. Verificar FFMPEG (Esto depende del usuario)
         if not transcriber.get_ffmpeg_executable():
             missing.append("FFmpeg (Necesario para procesar audio)")
 
-        # Verificar Whisper
+        # 2. Verificar Whisper (Debería estar incluido)
         if not transcriber.get_whisper_executable():
-            missing.append("Whisper-cli (Motor de transcripción)")
+            missing.append("ERROR: No se encuentra el motor interno (whisper-cli)")
 
         if missing:
-            msg = "Faltan componentes necesarios para funcionar:\n\n"
+            msg = "Faltan componentes necesarios:\n\n"
             for item in missing:
                 msg += f"❌ {item}\n"
 
-            if shutil.which("apt"): # Si estamos en Debian/Ubuntu/Mint
-                msg += "\nIntenta instalar con:\nsudo apt install ffmpeg"
+            if shutil.which("apt"): # Si es Debian/Ubuntu/Mint
+                msg += "\nIntenta instalar FFmpeg con:\nsudo apt install ffmpeg"
 
             self.mostrar_alerta_oscura("Faltan Dependencias", msg)
 
