@@ -15,7 +15,7 @@ temp_audio.wav
 whisper.cpp/
 Archivador.tar.gz
 dependencias.txt
-
+aztualiza.sh
 
 # Ignoramos archivos de sistema
 .DS_Store
