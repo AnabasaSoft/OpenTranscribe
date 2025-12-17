@@ -1,0 +1,142 @@
+name: Build OpenTranscribe Linux
+
+on:
+  push:
+    tags:
+      - 'v*' # Se ejecuta cuando subes un tag (ej: v1.0.0)
+  workflow_dispatch: # Permite ejecutarlo manualmente desde la pestaña Actions
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1. Bajar el código
+    - uses: actions/checkout@v4
+
+    # 2. Preparar Python
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    # 3. Instalar dependencias del sistema (necesarias para compilar)
+    - name: Install System Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y python3-tk tk-dev libsdl2-dev ffmpeg zenity ruby-full
+        # Instalar FPM (para crear .deb y .rpm)
+        sudo gem install fpm
+
+    # 4. Instalar dependencias de Python
+    - name: Install Python Dependencies
+      run: |
+        pip install --upgrade pip
+        pip install pyinstaller
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        # Aseguramos que tkinterdnd2 esté (a veces da guerra en requirements)
+        pip install tkinterdnd2 pygame customtkinter Pillow requests
+
+    # 5. Asegurar permisos del binario whisper
+    - name: Prepare Whisper Binary
+      run: |
+        chmod +x binaries_linux/whisper-cli
+        ls -l binaries_linux/
+
+    # 6. Crear el Ejecutable (PyInstaller)
+    - name: Build Binary with PyInstaller
+      run: |
+        pyinstaller --noconfirm --onefile --windowed \
+          --name "OpenTranscribe" \
+          --icon="icon.png" \
+          --add-data "binaries_linux:binaries_linux" \
+          --add-data "Logo.jpg:." \
+          --add-data "icon.png:." \
+          --hidden-import="PIL._tkinter_finder" \
+          --hidden-import="tkinter" \
+          --hidden-import="tkinterdnd2" \
+          main.py
+
+    # 7. Crear estructura de carpetas para el paquete (.deb/.rpm)
+    - name: Prepare Package Structure
+      run: |
+        mkdir -p package_root/usr/bin
+        mkdir -p package_root/usr/share/applications
+        mkdir -p package_root/usr/share/pixmaps
+
+        # Copiar el binario compilado
+        cp dist/OpenTranscribe package_root/usr/bin/opentranscribe
+        chmod +x package_root/usr/bin/opentranscribe
+
+        # Copiar el icono al sistema
+        cp icon.png package_root/usr/share/pixmaps/opentranscribe.png
+
+    # 8. Generar archivo .desktop
+    - name: Generate .desktop file
+      run: |
+        cat <<EOF > package_root/usr/share/applications/opentranscribe.desktop
+        [Desktop Entry]
+        Name=OpenTranscribe
+        Comment=Herramienta de transcripción automática con IA
+        Exec=/usr/bin/opentranscribe %f
+        Icon=opentranscribe
+        Terminal=false
+        Type=Application
+        Categories=AudioVideo;Audio;Utility;
+        MimeType=audio/mpeg;audio/x-wav;video/mp4;video/x-matroska;
+        Keywords=transcription;whisper;subtitles;
+        StartupNotify=true
+        EOF
+
+    # 9. Crear paquete .DEB (Debian/Ubuntu/Mint)
+    - name: Build DEB Package
+      run: |
+        fpm -s dir -t deb \
+          -n opentranscribe \
+          -v ${{ github.ref_name }} \
+          -a x86_64 \
+          --maintainer "TuNombre <tuemail@ejemplo.com>" \
+          --description "Transcriptor de audio y video usando Whisper.cpp local." \
+          --depends ffmpeg \
+          --depends zenity \
+          --depends libsdl2-2.0-0 \
+          -C package_root .
+
+        # Renombrar para que quede bonito (ej: OpenTranscribe-v1.0.0-linux-x64.deb)
+        mv *.deb OpenTranscribe-linux-x64.deb
+
+    # 10. Crear paquete .RPM (Fedora/RedHat/OpenSUSE)
+    - name: Build RPM Package
+      run: |
+        fpm -s dir -t rpm \
+          -n opentranscribe \
+          -v ${{ github.ref_name }} \
+          -a x86_64 \
+          --maintainer "TuNombre <tuemail@ejemplo.com>" \
+          --description "Transcriptor de audio y video usando Whisper.cpp local." \
+          --depends ffmpeg \
+          --depends zenity \
+          --depends SDL2 \
+          -C package_root .
+
+        mv *.rpm OpenTranscribe-linux-x64.rpm
+
+    # 11. Subir los artefactos a la acción (para descargarlos manual)
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: Linux-Packages
+        path: |
+          dist/OpenTranscribe
+          OpenTranscribe-linux-x64.deb
+          OpenTranscribe-linux-x64.rpm
+
+    # 12. Publicar Release (Opcional - crea la release en GitHub automáticamente)
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: |
+          dist/OpenTranscribe
+          OpenTranscribe-linux-x64.deb
+          OpenTranscribe-linux-x64.rpm
