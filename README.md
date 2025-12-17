@@ -1,7 +1,7 @@
 # OpenTranscribe 🎙️
 
 <p align="center">
-  <img src="https://github.com/AnabasaSoft/OpenTranscribe/blob/main/Logo.jpg" alt="OpenTranscribe Logo" width="400">
+  <img src="https://github.com/AnabasaSoft/OpenTranscribe/blob/main/Logo.jpg" alt="OpenTranscribe Logo" width="800">
 </p>
 
 Una aplicación de escritorio moderna y oscura para transcribir audio a texto utilizando la potencia de Whisper (C++).
