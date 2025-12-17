@@ -20,6 +20,18 @@ except ImportError:
     HAS_DOCX = False
     print("Nota: Instala 'python-docx' para exportar a Word.")
 import platform
+import sys
+import tkinter as tk
+
+def resource_path(relative_path):
+    """Obtiene la ruta absoluta al recurso, funcione en dev o en PyInstaller"""
+    try:
+        # PyInstaller crea una carpeta temporal en _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
 
 # Configuración inicial
 ctk.set_appearance_mode("Dark")
@@ -34,6 +46,19 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
         self.title("OpenTranscribe v2.0 Pro")
         self.geometry("750x700")
+
+        try:
+            # Buscamos icon.png usando la función segura
+            icon_file = resource_path("icon.png")
+
+            if os.path.exists(icon_file):
+                # Para Linux/macOS (y Windows modernos con PNG) se usa iconphoto
+                img_icon = tk.PhotoImage(file=icon_file)
+                self.iconphoto(True, img_icon) # True aplica el icono a todas las ventanas futuras
+            else:
+                print(f"Advertencia: No se encontró {icon_file}")
+        except Exception as e:
+            print(f"Error cargando icono: {e}")
 
         # Configuración principal
         self.grid_columnconfigure(0, weight=1)
