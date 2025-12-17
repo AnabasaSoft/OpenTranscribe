@@ -1,3 +1,0 @@
-bash ./models/download-ggml-model.sh medium
-
-wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin -P whisper.cpp/models/
