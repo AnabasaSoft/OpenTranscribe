@@ -4,7 +4,7 @@
 
 Una aplicación de escritorio moderna y oscura para transcribir audio a texto utilizando la potencia de Whisper (C++).
 
-![Captura de OpenTranscribe](Captura.png)
+![https://github.com/AnabasaSoft/OpenTranscribe/blob/main/Captura.png](Captura.png)
 
 ## Características 🚀
 - **Interfaz "Dark Mode"** profesional con CustomTkinter.
