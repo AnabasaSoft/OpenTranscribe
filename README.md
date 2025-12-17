@@ -15,7 +15,9 @@ Una aplicación de escritorio moderna y oscura para transcribir audio a texto ut
 1. Python 3.10+
 2. **FFmpeg** instalado en el sistema.
    - Linux: `sudo apt install ffmpeg`
-   - Windows: Descargar y añadir al PATH.
+3. **Whisper.cpp** - Motor de transcripción.
+4. **Zenity** - Para diálogos del sistema.
+   - Linux: `sudo apt install zenity`
 
 ## Instalación 📦
 
