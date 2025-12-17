@@ -44,7 +44,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.TkdndVersion = TkinterDnD._require(self)
         pygame.mixer.init()
 
-        self.title("OpenTranscribe v2.0 Pro")
+        self.title("OpenTranscribe v2.0")
         self.geometry("750x700")
 
         try:
@@ -70,6 +70,9 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.total_duration = 0
         self.current_offset = 0
         self.transcript_segments = []
+
+        self.queue_files = []
+        self.is_batch_mode = False
 
         # ============================================================
         # 1. TÍTULO
@@ -256,29 +259,144 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
             self.lbl_progress_percent.configure(text="0%")
 
     def start_transcription(self):
-        if not self.selected_file_path: return
-
-        # 1. Recogemos configuración
+        # 1. Configuración común
         srt_mode = self.switch_srt.get() == 1
         diarize_mode = self.switch_diarize.get() == 1
         model_name_ui = self.combo_models.get()
 
-        # 2. VERIFICACIÓN DE MODELO
+        # 2. VERIFICACIÓN DE MODELO (Igual que antes)
         exists, filename = transcriber.check_model_exists(model_name_ui)
-
         if not exists:
-            # Preguntar al usuario si quiere descargar
-            msg = f"El modelo '{filename}' no está descargado.\n¿Deseas descargarlo ahora? (~50MB - 3GB)"
+            msg = f"El modelo '{filename}' no está descargado.\n¿Deseas descargarlo ahora?"
             resp = self.mostrar_confirmacion_oscura("Modelo Faltante", msg)
-
             if resp:
-                # Iniciar proceso de descarga + transcripción
-                self.download_and_transcribe(filename, srt_mode, diarize_mode, model_name_ui)
-            return # Si dice que no, no hacemos nada
+                # Nota: Si es batch, primero bajamos modelo, luego iniciamos batch
+                self.download_and_transcribe(filename, srt_mode, diarize_mode, model_name_ui, is_batch=self.is_batch_mode)
+            return
 
-        # 3. Si existe, procedemos normal
-        self.prepare_ui_for_process()
-        threading.Thread(target=self.run_process, args=(srt_mode, diarize_mode, model_name_ui), daemon=True).start()
+        # 3. MODO BATCH vs NORMAL
+        if self.is_batch_mode:
+            # Preguntar formato UNA vez
+            target_ext = self.ask_export_format()
+            if not target_ext: return # Usuario canceló o cerró ventana
+
+            self.prepare_ui_for_process()
+            self.btn_process.configure(text="Procesando Cola...")
+
+            # Lanzar Hilo de Cola
+            threading.Thread(target=self.run_batch_process,
+                           args=(self.queue_files, model_name_ui, srt_mode, diarize_mode, target_ext),
+                           daemon=True).start()
+        else:
+            if not self.selected_file_path: return
+            self.prepare_ui_for_process()
+            threading.Thread(target=self.run_process, args=(srt_mode, diarize_mode, model_name_ui), daemon=True).start()
+
+    def run_batch_process(self, file_list, model_name, srt_mode, diarize_mode, extension):
+        """Procesa la lista de archivos con una barra de progreso GLOBAL basada en el tiempo total."""
+
+        # 1. FASE DE PREPARACIÓN: Calcular duración total de la cola
+        self.textbox.delete("0.0", "end")
+        self.textbox.insert("0.0", "⏳ Analizando duración total de la cola...\n")
+
+        total_batch_duration = 0
+        files_durations = {}
+
+        # Pre-calculamos la duración de cada archivo para ponderar la barra
+        for f in file_list:
+            duration = transcriber.get_audio_duration(f)
+            files_durations[f] = duration
+            total_batch_duration += duration
+
+        total_files = len(file_list)
+        accumulated_time = 0 # Tiempo acumulado de los archivos ya terminados
+
+        self.textbox.insert("end", f"Total a procesar: {time.strftime('%H:%M:%S', time.gmtime(total_batch_duration))}\n\n")
+
+        # 2. BUCLE DE PROCESAMIENTO
+        for index, audio_file in enumerate(file_list):
+            if transcriber.is_cancelled: break
+
+            # Datos del archivo actual
+            file_name = os.path.basename(audio_file)
+            current_file_duration = files_durations.get(audio_file, 0)
+
+            # --- ACTUALIZACIÓN VISUAL DEL HEADER ---
+            msg_header = f"--- [{index + 1}/{total_files}] PROCESANDO: {file_name} ---\n"
+            msg_header += f"⏱️ Duración: {time.strftime('%M:%S', time.gmtime(current_file_duration))}\n"
+
+            # Escribimos en el textbox sin borrar lo anterior para tener un historial
+            # O si prefieres borrar: self.textbox.delete("0.0", "end")
+            self.textbox.insert("end", "\n" + msg_header)
+            self.textbox.see("end") # Auto-scroll al fondo
+
+            self.title(f"OpenTranscribe (Archivo {index + 1} de {total_files})")
+
+            # --- CALLBACK INTELIGENTE PARA LA BARRA GLOBAL ---
+            def batch_progress_callback(local_percent):
+                """
+                Convierte el % del archivo actual en el % del total de la cola.
+                Fórmula: (Tiempo_Acumulado + (Tiempo_Archivo * %_Local)) / Tiempo_Total
+                """
+                if total_batch_duration > 0:
+                    # Cuántos segundos llevamos de ESTE archivo
+                    seconds_done_current = current_file_duration * local_percent
+
+                    # Cuántos segundos llevamos EN TOTAL (anteriores + actual)
+                    total_seconds_done = accumulated_time + seconds_done_current
+
+                    # Porcentaje global (0.0 a 1.0)
+                    global_percent = total_seconds_done / total_batch_duration
+
+                    # Actualizamos la barra
+                    self.update_progress(global_percent)
+
+                    # Actualizamos el texto del porcentaje para que sea informativo
+                    percent_text = f"{int(global_percent * 100)}% (Total)"
+                    self.lbl_progress_percent.configure(text=percent_text)
+
+            # --- EJECUCIÓN ---
+            # Variable para acumular texto solo de este archivo para el guardado
+            self.current_batch_text_accumulator = ""
+
+            def text_accumulator(text):
+                self.current_batch_text_accumulator += text
+                # Opcional: Si quieres que salga en pantalla en tiempo real:
+                # self.textbox.insert("end", text)
+                # self.textbox.see("end")
+
+            transcriber.run_transcription(
+                audio_file,
+                model_name,
+                text_accumulator, # Usamos el acumulador limpio
+                batch_progress_callback, # Usamos el nuevo callback global
+                with_timestamps=srt_mode,
+                diarize=diarize_mode
+            )
+
+            # --- AL TERMINAR EL ARCHIVO ---
+            if not transcriber.is_cancelled:
+                # 1. Guardar
+                try:
+                    saved_path = self.auto_save_transcript(self.current_batch_text_accumulator, audio_file, extension)
+                    self.textbox.insert("end", f"✅ Guardado en: {os.path.basename(saved_path)}\n")
+                except Exception as e:
+                    self.textbox.insert("end", f"❌ Error guardando: {e}\n")
+
+                # 2. Sumar el tiempo de este archivo al acumulado global
+                accumulated_time += current_file_duration
+                self.textbox.see("end")
+
+            # Pequeña pausa para respirar
+            time.sleep(1)
+
+        # 3. FINALIZACIÓN
+        self.after(0, lambda: [
+            self.finish_transcription_ui(),
+            self.progress_bar.set(1), # Asegurar 100% visual al final
+            self.lbl_progress_percent.configure(text="100%"),
+            self.mostrar_alerta_oscura("Cola Finalizada", f"Se han procesado {total_files} archivos correctamente.")
+        ])
 
     def prepare_ui_for_process(self):
         self.textbox.delete("0.0", "end")
@@ -434,29 +552,89 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def select_file(self):
         filename = ""
+        # Definimos el filtro visual
+        filtro_visual = "*.mp3 *.wav *.m4a *.mp4 *.mkv *.mov *.avi *.webm *.flv"
+
         if shutil.which("zenity"):
             try:
-                cmd = ["zenity", "--file-selection", "--title=Seleccionar Audio", "--file-filter=Audio | *.mp3 *.wav *.m4a *.mkv *.mp4"]
+                # Zenity en Linux
+                cmd = ["zenity", "--file-selection", "--title=Seleccionar Audio/Video",
+                       f"--file-filter=Media | {filtro_visual}"]
                 filename = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode("utf-8").strip()
             except subprocess.CalledProcessError: return
         else:
-            filename = filedialog.askopenfilename(title="Seleccionar Audio", filetypes=[("Archivos de audio", "*.mp3 *.wav *.m4a")])
+            # Diálogo estándar (Windows/Mac/Linux sin Zenity)
+            filename = filedialog.askopenfilename(
+                title="Seleccionar Multimedia",
+                filetypes=[("Audio y Vídeo", filtro_visual)]
+            )
+
         if filename: self.cargar_archivo_comun(filename)
 
     def al_soltar_archivo(self, event):
-        filepath = event.data
-        if filepath.startswith("{") and filepath.endswith("}"): filepath = filepath[1:-1]
-        self.cargar_archivo_comun(filepath)
+        filepaths = self.parse_dropped_files(event.data)
+
+        if not filepaths:
+            return
+
+        valid_exts = ['.mp3', '.wav', '.m4a', '.mp4', '.mkv', '.mov', '.avi', '.webm', '.flv']
+
+        if len(filepaths) == 1:
+            # Comportamiento normal (1 archivo)
+            self.queue_files = []
+            self.is_batch_mode = False
+            self.cargar_archivo_comun(filepaths[0])
+        else:
+            # MODO BATCH
+            self.queue_files = filepaths
+            self.is_batch_mode = True
+
+            # Validar extensiones
+            valid_files = [f for f in filepaths if any(f.lower().endswith(ext) for ext in valid_exts)]
+            self.queue_files = valid_files
+
+            if not valid_files:
+                self.mostrar_alerta_oscura("Error", "Ningún archivo válido detectado.")
+                return
+
+            # Actualizar UI
+            self.lbl_filename.configure(text=f"📚 COLA: {len(valid_files)} archivos listos", text_color="#4da6ff")
+            self.btn_process.configure(state="normal", text="Procesar Cola 📚")
+            self.btn_play.configure(state="disabled") # No reproducimos en modo cola
+            self.textbox.delete("0.0", "end")
+            self.textbox.insert("0.0", "Modo Cola activado.\nArchivos detectados:\n\n")
+            for f in valid_files:
+                self.textbox.insert("end", f"• {os.path.basename(f)}\n")
 
     def cargar_archivo_comun(self, filename):
-        if not any(filename.lower().endswith(ext) for ext in ['.mp3', '.wav', '.m4a', '.mp4', '.mkv']):
+        # 1. Validar extensión
+        extensiones_validas = ['.mp3', '.wav', '.m4a', '.mp4', '.mkv', '.mov', '.avi', '.webm', '.flv']
+
+        if not any(filename.lower().endswith(ext) for ext in extensiones_validas):
             self.mostrar_alerta_oscura("Error", "Formato no soportado.")
             return
+
+        # 2. Resetear variables de Cola (IMPORTANTE para salir del modo Batch)
+        self.is_batch_mode = False
+        self.queue_files = []
+
+        # 3. Actualizar Referencias
         self.selected_file_path = filename
         self.lbl_filename.configure(text=os.path.basename(filename), text_color="white")
-        self.btn_process.configure(state="normal")
+
+        # 4. RESTAURAR UI (Aquí estaba el fallo)
+        # Volvemos el botón a su texto normal
+        self.btn_process.configure(state="normal", text="TRANSCRIBIR")
+
+        # Limpiamos la caja de texto (borramos la lista de la cola anterior)
+        self.textbox.delete("0.0", "end")
+        self.textbox.insert("0.0", "El texto transcrito aparecerá aquí...\n")
+
+        # Reseteamos barras de progreso
         self.progress_bar.set(0)
         self.lbl_progress_percent.configure(text="0%")
+
+        # 5. Cargar Previsualización de Audio
         self.load_audio_preview()
 
     def load_audio_preview(self):
@@ -744,52 +922,126 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
             self.destroy()
 
     def abrir_ayuda(self):
-        # Crear ventana emergente
+        # Crear ventana emergente más grande
         ayuda_window = ctk.CTkToplevel(self)
-        ayuda_window.title("Ayuda - OpenTranscribe")
-        ayuda_window.geometry("400x550")
-        ayuda_window.resizable(False, False)
+        ayuda_window.title("Manual de Usuario - OpenTranscribe")
+        ayuda_window.geometry("550x750") # Más alto para que quepa todo
+        ayuda_window.resizable(False, True) # Permitir redimensionar alto
         ayuda_window.attributes("-topmost", True)
 
-        # Logo
+        # 1. LOGO (Depurado y Ajustado)
         try:
-            if os.path.exists("Logo.jpg"):
-                img_data = Image.open("Logo.jpg")
-                logo_img = ctk.CTkImage(light_image=img_data, dark_image=img_data, size=(120, 120)) # Reduje un poco el logo
+            logo_path = "Logo.jpg"
+            # Soporte para modo congelado (exe/binario)
+            if hasattr(sys, '_MEIPASS'):
+                logo_path = os.path.join(sys._MEIPASS, "Logo.jpg")
+            # Soporte para modo desarrollo local
+            elif not os.path.exists(logo_path):
+                logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Logo.jpg")
+
+            if os.path.exists(logo_path):
+                img_data = Image.open(logo_path)
+
+                # --- CONFIGURACIÓN DE TAMAÑO ---
+                # La ventana mide 550px de ancho.
+                # 350px es un tamaño muy bueno (grande pero cabe con márgenes).
+                ancho_deseado = 350
+
+                # Calculamos el alto proporcional (Regla de tres)
+                w_original, h_original = img_data.size
+                ratio = ancho_deseado / float(w_original)
+                alto_calculado = int(float(h_original) * float(ratio))
+
+                print(f"DEBUG: Cargando logo. Original: {w_original}x{h_original} -> Nuevo: {ancho_deseado}x{alto_calculado}")
+
+                logo_img = ctk.CTkImage(light_image=img_data, dark_image=img_data,
+                                      size=(ancho_deseado, alto_calculado))
+
                 lbl_img = ctk.CTkLabel(ayuda_window, text="", image=logo_img)
-                lbl_img.pack(pady=(15, 5))
-        except Exception: pass
+                lbl_img.pack(pady=(20, 10))
+            else:
+                print(f"DEBUG: No se encontró el archivo en: {logo_path}")
 
-        # Título
-        ctk.CTkLabel(ayuda_window, text="Guía Rápida", font=("Roboto Medium", 18)).pack(pady=5)
+        except Exception as e:
+            print(f"ERROR cargando el logo: {e}")
 
-        # Texto explicativo
-        texto_ayuda = (
-            "1. Selecciona o arrastra un archivo de audio.\n"
-            "2. Elige el Modelo y pulsa 'Transcribir'.\n\n"
-            "Usa el reproductor para corregir.\n"
-            "El botón 'Sincronizar' ajusta los tiempos.\n"
+        ctk.CTkLabel(ayuda_window, text="OpenTranscribe v2.0", font=("Roboto Medium", 20)).pack(pady=5)
+
+        # 2. ÁREA DE TEXTO CON SCROLL (Para todo el manual)
+        # Usamos Textbox en modo lectura para que sea scrollable y copiable
+        info_text = ctk.CTkTextbox(ayuda_window, width=500, height=480, corner_radius=10,
+                                   fg_color="#232323", text_color="#eeeeee", font=("Consolas", 12))
+        info_text.pack(pady=10, padx=20, fill="both", expand=True)
+
+        # --- CONTENIDO DEL MANUAL ---
+        manual = (
+            "============================================\n"
+            "GUÍA DE FUNCIONES PRINCIPALES\n"
+            "============================================\n\n"
+
+            "1. TRANCRIPCIÓN BÁSICA\n"
+            "----------------------\n"
+            "• Arrastra un archivo de audio o vídeo a la ventana.\n"
+            "• Elige el 'Modelo IA' (Base es recomendado).\n"
+            "• Pulsa 'TRANSCRIBIR'.\n\n"
+
+            "2. MODO COLA (Lotes / Batch) [NUEVO] 📚\n"
+            "------------------------------------\n"
+            "• Arrastra MÚLTIPLES archivos a la vez (ej. 10 vídeos).\n"
+            "• La aplicación detectará el modo 'Cola'.\n"
+            "• Pulsa 'Procesar Cola'.\n"
+            "• El sistema te preguntará el formato (Word, PDF, etc.).\n"
+            "• Los archivos se guardarán AUTOMÁTICAMENTE en la\n"
+            "  misma carpeta que los originales.\n\n"
+
+            "3. SOPORTE MULTIMEDIA 🎬\n"
+            "------------------------\n"
+            "• Aceptamos: MP3, WAV, M4A (Audio).\n"
+            "• Aceptamos: MP4, MKV, AVI, MOV, WEBM (Vídeo).\n"
+            "• El vídeo se procesa internamente, no necesitas\n"
+            "  extraer el audio antes.\n\n"
+
+            "4. HERRAMIENTAS INTELIGENTES\n"
+            "----------------------------\n"
+            "• Detectar Hablantes 👥: Intenta distinguir quién habla\n"
+            "  (Hablante 1, Hablante 2...).\n"
+            "• Modo Subtítulos: Genera marcas de tiempo exactas\n"
+            "  para crear archivos .SRT o .VTT.\n"
+            "• Reproductor Karaoke: Pulsa ▶ para escuchar el audio\n"
+            "  y ver cómo se resalta el texto en tiempo real.\n"
+            "• Sincronizar: Si editas el texto manualmente, pulsa\n"
+            "  este botón para recalcular los tiempos del karaoke.\n\n"
+
+            "5. EXPORTACIÓN\n"
+            "--------------\n"
+            "• Word (.docx): Con colores y negritas.\n"
+            "• Subtítulos (.srt/.vtt): Listos para YouTube/VLC.\n"
+            "• Excel (.csv): Para análisis de datos.\n"
+            "• Texto (.txt): Simple y ligero.\n"
         )
-        ctk.CTkLabel(ayuda_window, text=texto_ayuda, wraplength=350).pack(pady=5, padx=20)
 
-        # Separador
-        ctk.CTkFrame(ayuda_window, height=2, fg_color="gray").pack(fill="x", padx=40, pady=10)
+        info_text.insert("0.0", manual)
+        info_text.configure(state="disabled") # Hacemos que sea solo lectura
 
-        # --- SECCIÓN CONTACTO CLICABLE ---
-        ctk.CTkLabel(ayuda_window, text="Soporte y Contacto:", font=("Roboto", 12, "bold")).pack(pady=(5, 0))
+        # 3. SECCIÓN DE CONTACTO
+        frame_contact = ctk.CTkFrame(ayuda_window, fg_color="transparent")
+        frame_contact.pack(pady=10, fill="x")
 
-        # 1. Email Clicable
-        lbl_mail = ctk.CTkLabel(ayuda_window, text="anabasasoft@gmail.com", text_color="#4da6ff", cursor="hand2")
-        lbl_mail.pack(pady=2)
+        ctk.CTkLabel(frame_contact, text="¿Dudas o Bugs?", font=("Roboto", 12, "bold")).pack()
+
+        # Email Clicable
+        lbl_mail = ctk.CTkLabel(frame_contact, text="anabasasoft@gmail.com", text_color="#4da6ff", cursor="hand2")
+        lbl_mail.pack()
         lbl_mail.bind("<Button-1>", lambda e: webbrowser.open("mailto:anabasasoft@gmail.com"))
 
-        # 2. Web Clicable
-        lbl_web = ctk.CTkLabel(ayuda_window, text="anabasasoft.github.io", text_color="#4da6ff", cursor="hand2")
-        lbl_web.pack(pady=2)
+        # Web Clicable
+        lbl_web = ctk.CTkLabel(frame_contact, text="anabasasoft.github.io", text_color="#4da6ff", cursor="hand2")
+        lbl_web.pack()
         lbl_web.bind("<Button-1>", lambda e: webbrowser.open("https://anabasasoft.github.io"))
 
-        # Botón cerrar
-        ctk.CTkButton(ayuda_window, text="Entendido", command=ayuda_window.destroy, width=100).pack(pady=20)
+        # Botón Cerrar
+        ctk.CTkButton(ayuda_window, text="Cerrar", command=ayuda_window.destroy,
+                      fg_color="#333", hover_color="#444", width=100).pack(pady=(5, 20))
 
     def check_system_requirements(self):
         """Verifica dependencias del sistema"""
@@ -812,6 +1064,177 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 msg += "\nIntenta instalar FFmpeg con:\nsudo apt install ffmpeg"
 
             self.mostrar_alerta_oscura("Faltan Dependencias", msg)
+
+    def parse_dropped_files(self, data):
+        """Convierte el string de TkinterDnD en una lista de rutas limpias."""
+        # Si viene entre corchetes {} (común en Linux/Windows con espacios)
+        # Usamos regex para separar
+        files = []
+        if data.startswith('{') or '}' in data:
+            parts = re.findall(r'\{.*?\}|\S+', data)
+            for part in parts:
+                path = part.strip('{}')
+                if os.path.isfile(path):
+                    files.append(path)
+        else:
+            # Caso simple: un archivo o varios sin espacios
+            candidates = data.split()
+            for c in candidates:
+                if os.path.isfile(c):
+                    files.append(c)
+
+        # Fallback: si el regex falla, intentamos usar data directo si es un archivo
+        if not files and os.path.isfile(data):
+            files = [data]
+
+        return files
+
+    def ask_export_format(self):
+        """Pregunta al usuario en qué formato guardar los archivos de la cola."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Formato de Salida")
+        dialog.geometry("300x250")
+        dialog.resizable(False, False)
+        dialog.attributes("-topmost", True)
+
+        self.selected_format = None
+
+        ctk.CTkLabel(dialog, text="Elige el formato para guardar:", font=("Roboto", 14, "bold")).pack(pady=20)
+
+        def set_format(fmt):
+            self.selected_format = fmt
+            dialog.destroy()
+
+        ctk.CTkButton(dialog, text="📄 Word (.docx)", command=lambda: set_format(".docx") if HAS_DOCX else None,
+                      state="normal" if HAS_DOCX else "disabled", fg_color="#2b5797").pack(pady=5)
+        ctk.CTkButton(dialog, text="📝 Texto (.txt)", command=lambda: set_format(".txt"), fg_color="#444").pack(pady=5)
+        ctk.CTkButton(dialog, text="🎬 Subtítulos (.srt)", command=lambda: set_format(".srt"), fg_color="#d68a00").pack(pady=5)
+        ctk.CTkButton(dialog, text="📊 Excel/CSV (.csv)", command=lambda: set_format(".csv"), fg_color="#217346").pack(pady=5)
+
+        dialog.wait_window(dialog)
+        return self.selected_format
+
+    def auto_save_transcript(self, text_content, audio_path, extension):
+        """
+        Guarda la transcripción automáticamente en la misma carpeta del audio original,
+        soportando todos los formatos (.docx, .txt, .srt, .vtt, .csv).
+        """
+        if not text_content.strip():
+            return None
+
+        # 1. Generar nombre de archivo basado en el audio original
+        # Ejemplo: /home/user/Entrevista.mp3 -> /home/user/Entrevista_Transcribed.docx
+        folder = os.path.dirname(audio_path)
+        base_name = os.path.splitext(os.path.basename(audio_path))[0]
+        filename = os.path.join(folder, f"{base_name}_Transcribed{extension}")
+
+        try:
+            # --- FASE A: PARSEO DEL TEXTO (Convertir texto plano a datos estructurados) ---
+            lines_data = []
+            raw_lines = text_content.split('\n')
+            # Regex para detectar tiempos: [00:00:00.000 --> 00:00:05.000]
+            timestamp_pattern = re.compile(r"\[(\d{2}:\d{2}:\d{2}[\.,]\d{3}) --> (\d{2}:\d{2}:\d{2}[\.,]\d{3})\]")
+
+            current_segment = {"start": "", "end": "", "text": ""}
+
+            for line in raw_lines:
+                match = timestamp_pattern.search(line)
+                if match:
+                    # Si encontramos una línea de tiempo, guardamos el segmento anterior y empezamos uno nuevo
+                    if current_segment["start"]:
+                        lines_data.append(current_segment)
+
+                    start_time = match.group(1).replace(',', '.')
+                    end_time = match.group(2).replace(',', '.')
+
+                    # Limpiamos el texto quitando la marca de tiempo
+                    text_part = timestamp_pattern.sub("", line).strip()
+
+                    current_segment = {"start": start_time, "end": end_time, "text": text_part}
+                else:
+                    # Si es una línea de texto continuado sin tiempo (o el header)
+                    if line.strip():
+                        if current_segment["start"]: # Solo añadimos si estamos dentro de un segmento válido
+                            current_segment["text"] += " " + line.strip()
+                        # Nota: Ignoramos el header de "Procesando archivo..." si no tiene timestamp
+
+            # Añadir el último segmento que quedó pendiente
+            if current_segment["start"]:
+                lines_data.append(current_segment)
+
+
+            # --- FASE B: GUARDADO SEGÚN EXTENSIÓN ---
+
+            # 1. WORD (.docx)
+            if extension == ".docx" and HAS_DOCX:
+                doc = Document()
+                doc.add_heading(f'Transcripción: {base_name}', 0)
+
+                for item in lines_data:
+                    p = doc.add_paragraph()
+
+                    # Estilo del tiempo (Azul)
+                    run_time = p.add_run(f"[{item['start']} - {item['end']}] ")
+                    run_time.bold = True
+                    run_time.font.color.rgb = RGBColor(0, 50, 150)
+
+                    # Estilo del texto (Detectando hablantes si los hay)
+                    text_content_seg = item["text"]
+                    if "👤" in text_content_seg:
+                        parts = text_content_seg.split(":", 1)
+                        if len(parts) > 1:
+                            run_speaker = p.add_run(parts[0] + ":")
+                            run_speaker.bold = True
+                            run_speaker.font.color.rgb = RGBColor(200, 0, 0) # Rojo oscuro
+                            p.add_run(parts[1])
+                        else:
+                            p.add_run(text_content_seg)
+                    else:
+                        p.add_run(text_content_seg)
+
+                doc.save(filename)
+
+            # 2. EXCEL / CSV (.csv)
+            elif extension == ".csv":
+                with open(filename, mode='w', newline='', encoding='utf-8-sig') as csv_file:
+                    writer = csv.writer(csv_file, delimiter=';')
+                    writer.writerow(['Inicio', 'Fin', 'Contenido'])
+                    for item in lines_data:
+                        writer.writerow([item["start"], item["end"], item["text"]])
+
+            # 3. SUBTÍTULOS VTT (.vtt)
+            elif extension == ".vtt":
+                with open(filename, "w", encoding="utf-8") as f:
+                    f.write("WEBVTT\n\n")
+                    for i, item in enumerate(lines_data):
+                        f.write(f"{i+1}\n")
+                        # VTT usa puntos para milisegundos (00:00:00.000)
+                        f.write(f"{item['start']} --> {item['end']}\n")
+                        f.write(f"{item['text']}\n\n")
+
+            # 4. SUBTÍTULOS SRT (.srt)
+            elif extension == ".srt":
+                with open(filename, "w", encoding="utf-8") as f:
+                    for i, item in enumerate(lines_data):
+                        f.write(f"{i+1}\n")
+                        # SRT usa comas para milisegundos (00:00:00,000)
+                        start_srt = item['start'].replace('.', ',')
+                        end_srt = item['end'].replace('.', ',')
+                        f.write(f"{start_srt} --> {end_srt}\n")
+                        f.write(f"{item['text']}\n\n")
+
+            # 5. TEXTO PLANO (.txt)
+            else:
+                # Para TXT guardamos todo el contenido raw (incluyendo headers si los hubiera)
+                # o reconstruimos limpio. Aquí guardamos el raw original para mantener consistencia.
+                with open(filename, "w", encoding="utf-8") as f:
+                    f.write(text_content)
+
+            return filename
+
+        except Exception as e:
+            print(f"Error guardando automático ({extension}): {e}")
+            return None
 
 if __name__ == "__main__":
     app = OpenTranscribeApp()
