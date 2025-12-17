@@ -27,7 +27,7 @@ jobs:
     - name: Install System Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y python3-tk tk-dev libsdl2-dev ffmpeg zenity ruby-full
+        sudo apt-get install -y python3-tk tk-dev libsdl2-dev ffmpeg ruby-full
         # Instalar FPM (para crear .deb y .rpm)
         sudo gem install fpm
 
@@ -101,7 +101,6 @@ jobs:
           --maintainer "TuNombre <tuemail@ejemplo.com>" \
           --description "Transcriptor de audio y video usando Whisper.cpp local." \
           --depends ffmpeg \
-          --depends zenity \
           --depends libsdl2-2.0-0 \
           -C package_root .
 
@@ -118,7 +117,6 @@ jobs:
           --maintainer "TuNombre <tuemail@ejemplo.com>" \
           --description "Transcriptor de audio y video usando Whisper.cpp local." \
           --depends ffmpeg \
-          --depends zenity \
           --depends SDL2 \
           -C package_root .
 

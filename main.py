@@ -551,25 +551,32 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
             self.btn_play.configure(text="▶ Reanudar", fg_color="#333")
 
     def select_file(self):
-        filename = ""
-        # Definimos el filtro visual
-        filtro_visual = "*.mp3 *.wav *.m4a *.mp4 *.mkv *.mov *.avi *.webm *.flv"
+        """Abre el explorador nativo del sistema."""
+        # Filtros de archivo
+        file_types = [
+            ("Todos los medios", "*.mp3 *.wav *.m4a *.mp4 *.mkv *.mov *.avi *.webm *.flv"),
+            ("Audio", "*.mp3 *.wav *.m4a"),
+            ("Vídeo", "*.mp4 *.mkv *.mov *.avi *.webm *.flv"),
+            ("Todos los archivos", "*.*")
+        ]
 
-        if shutil.which("zenity"):
-            try:
-                # Zenity en Linux
-                cmd = ["zenity", "--file-selection", "--title=Seleccionar Audio/Video",
-                       f"--file-filter=Media | {filtro_visual}"]
-                filename = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode("utf-8").strip()
-            except subprocess.CalledProcessError: return
+        # Usamos filedialog nativo (permite selección múltiple)
+        filenames = filedialog.askopenfilenames(
+            title="Seleccionar Archivos",
+            filetypes=file_types
+        )
+
+        if not filenames:
+            return # Cancelado
+
+        # Convertimos a lista
+        filepaths = list(filenames)
+
+        if len(filepaths) == 1:
+            self.cargar_archivo_comun(filepaths[0])
         else:
-            # Diálogo estándar (Windows/Mac/Linux sin Zenity)
-            filename = filedialog.askopenfilename(
-                title="Seleccionar Multimedia",
-                filetypes=[("Audio y Vídeo", filtro_visual)]
-            )
-
-        if filename: self.cargar_archivo_comun(filename)
+            # Lógica de Cola
+            self.al_soltar_archivo(type('Event', (object,), {'data': " ".join(filepaths)})())
 
     def al_soltar_archivo(self, event):
         filepaths = self.parse_dropped_files(event.data)
@@ -687,98 +694,93 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.lbl_progress_percent.configure(text=percent_text)
 
     def save_text(self):
-        # 1. Obtener contenido
+        """Guardado nativo robusto."""
+        if self.is_batch_mode:
+            self.mostrar_alerta_oscura("Aviso", "En modo Cola el guardado es automático.")
+            return
+
         raw_content = self.textbox.get("0.0", "end").strip()
-        if not raw_content:
+        if not raw_content or "El texto transcrito aparecerá aquí" in raw_content:
             self.mostrar_alerta_oscura("Error", "No hay texto para guardar.")
             return
 
-        filename = ""
+        # Filtros
+        filtros = [
+            ("Documento Word (*.docx)", "*.docx") if HAS_DOCX else None,
+            ("Texto Plano (*.txt)", "*.txt"),
+            ("Subtítulos SRT (*.srt)", "*.srt"),
+            ("Subtítulos VTT (*.vtt)", "*.vtt"),
+            ("Excel / CSV (*.csv)", "*.csv")
+        ]
+        filtros = [f for f in filtros if f is not None]
 
-        # 2. INTENTO PRIORITY: Usar Zenity (Mejor integración visual en Linux)
-        if shutil.which("zenity"):
-            try:
-                # Construimos el comando con filtros para que aparezca el desplegable
-                cmd = [
-                    "zenity", "--file-selection", "--save", "--confirm-overwrite",
-                    "--title=Guardar Transcripción",
-                    "--filename=Transcripcion.docx" if HAS_DOCX else "Transcripcion.txt"
-                ]
+        # Diálogo nativo
+        filename = filedialog.asksaveasfilename(
+            title="Guardar Transcripción",
+            defaultextension=".docx" if HAS_DOCX else ".txt",
+            filetypes=filtros
+        )
 
-                # Añadimos los filtros compatibles
-                if HAS_DOCX:
-                    cmd.append("--file-filter=Microsoft Word (*.docx) | *.docx")
-                cmd.append("--file-filter=Texto Plano (*.txt) | *.txt")
-                cmd.append("--file-filter=Subtítulos SRT (*.srt) | *.srt")
-                cmd.append("--file-filter=Subtítulos VTT (*.vtt) | *.vtt")
-                cmd.append("--file-filter=Excel / CSV (*.csv) | *.csv")
-
-                # Ejecutamos Zenity
-                filename = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode("utf-8").strip()
-            except:
-                # Si el usuario cancela o falla Zenity, filename se queda vacío
-                pass
-
-        # 3. INTENTO SECUNDARIO: Si falló Zenity, usamos el estándar (puede salir blanco)
         if not filename:
-            # Solo abrimos este si no se seleccionó nada arriba y no fue una cancelación voluntaria
-            # (Simplificación: Si tienes Zenity instalado, usará el de arriba. Si no, este).
-            if not shutil.which("zenity"):
-                file_types = [
-                    ("Texto Plano (*.txt)", "*.txt"),
-                    ("Subtítulos SRT (*.srt)", "*.srt"),
-                    ("Subtítulos VTT (*.vtt)", "*.vtt"),
-                    ("Excel / CSV (*.csv)", "*.csv")
-                ]
-                if HAS_DOCX:
-                    file_types.insert(0, ("Microsoft Word (*.docx)", "*.docx"))
+            return
 
-                filename = filedialog.asksaveasfilename(
-                    title="Guardar Transcripción",
-                    defaultextension=".docx" if HAS_DOCX else ".txt",
-                    filetypes=file_types
-                )
-
-        if not filename: return
-
-        # 4. Procesar y Guardar (Igual que antes)
         ext = os.path.splitext(filename)[1].lower()
 
         try:
-            # --- PARSEO ---
+            # 3. PARSEO DEL TEXTO (Convertir texto plano a estructura de datos)
             lines_data = []
-            raw_lines = raw_content.split('\n')
+
+            # Regex para capturar tiempos: [00:00:00.000 --> 00:00:05.000]
             timestamp_pattern = re.compile(r"\[(\d{2}:\d{2}:\d{2}[\.,]\d{3}) --> (\d{2}:\d{2}:\d{2}[\.,]\d{3})\]")
 
-            current_segment = {"start": "", "end": "", "text": ""}
+            raw_lines = raw_content.split('\n')
+            current_seg = {"start": "", "end": "", "text": ""}
 
             for line in raw_lines:
                 match = timestamp_pattern.search(line)
                 if match:
-                    current_segment["start"] = match.group(1).replace(',', '.')
-                    current_segment["end"] = match.group(2).replace(',', '.')
-                    text_part = timestamp_pattern.sub("", line).strip()
-                    current_segment["text"] = text_part
-                    lines_data.append(current_segment)
-                    current_segment = {"start": "", "end": "", "text": ""}
+                    # Guardar segmento previo
+                    if current_seg["start"]:
+                        lines_data.append(current_seg)
+
+                    # Normalizar tiempos (usar punto internamente)
+                    s_time = match.group(1).replace(',', '.')
+                    e_time = match.group(2).replace(',', '.')
+
+                    # Limpiar el texto de la marca de tiempo
+                    txt = timestamp_pattern.sub("", line).strip()
+
+                    current_seg = {"start": s_time, "end": e_time, "text": txt}
                 else:
+                    # Texto continuado (sin tiempo)
                     if line.strip():
-                        if current_segment["text"]:
-                            current_segment["text"] += " " + line.strip()
+                        if current_seg["start"]:
+                            current_seg["text"] += " " + line.strip()
                         else:
+                            # Texto huérfano (headers, notas)
                             lines_data.append({"start": "", "end": "", "text": line.strip()})
 
-            # --- GUARDADO POR FORMATO ---
+            # Añadir el último segmento
+            if current_seg["start"] or current_seg["text"]:
+                lines_data.append(current_seg)
+
+            # 4. ESCRITURA SEGÚN EL FORMATO
+
+            # --- A) MICROSOFT WORD (.docx) ---
             if ext == ".docx" and HAS_DOCX:
                 doc = Document()
                 doc.add_heading('Transcripción - OpenTranscribe', 0)
+
                 for item in lines_data:
                     p = doc.add_paragraph()
+
+                    # Tiempo en Azul
                     if item["start"]:
                         run_time = p.add_run(f"[{item['start']} - {item['end']}] ")
                         run_time.bold = True
                         run_time.font.color.rgb = RGBColor(0, 50, 150)
 
+                    # Detección de Hablantes (Rojo)
                     text_content = item["text"]
                     if "👤" in text_content:
                         parts = text_content.split(":", 1)
@@ -791,44 +793,57 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
                             p.add_run(text_content)
                     else:
                         p.add_run(text_content)
+
                 doc.save(filename)
 
+            # --- B) EXCEL / CSV (.csv) ---
             elif ext == ".csv":
                 with open(filename, mode='w', newline='', encoding='utf-8-sig') as csv_file:
                     writer = csv.writer(csv_file, delimiter=';')
                     writer.writerow(['Inicio', 'Fin', 'Contenido'])
                     for item in lines_data:
-                        writer.writerow([item["start"], item["end"], item["text"]])
+                        if item["start"]:
+                            writer.writerow([item["start"], item["end"], item["text"]])
 
+            # --- C) SUBTÍTULOS VTT (.vtt) ---
             elif ext == ".vtt":
                 with open(filename, "w", encoding="utf-8") as f:
                     f.write("WEBVTT\n\n")
-                    for i, item in enumerate(lines_data):
+                    counter = 1
+                    for item in lines_data:
                         if item["start"]:
-                            f.write(f"{i+1}\n")
+                            f.write(f"{counter}\n")
                             f.write(f"{item['start']} --> {item['end']}\n")
                             f.write(f"{item['text']}\n\n")
+                            counter += 1
 
+            # --- D) SUBTÍTULOS SRT (.srt) ---
             elif ext == ".srt":
                 with open(filename, "w", encoding="utf-8") as f:
-                    for i, item in enumerate(lines_data):
+                    counter = 1
+                    for item in lines_data:
                         if item["start"]:
-                            f.write(f"{i+1}\n")
+                            f.write(f"{counter}\n")
+                            # SRT requiere coma en milisegundos
                             start_srt = item['start'].replace('.', ',')
                             end_srt = item['end'].replace('.', ',')
                             f.write(f"{start_srt} --> {end_srt}\n")
                             f.write(f"{item['text']}\n\n")
+                            counter += 1
 
-            else: # .txt
+            # --- E) TEXTO PLANO (.txt) ---
+            else:
                 with open(filename, "w", encoding="utf-8") as f:
                     f.write(raw_content)
 
+            # 5. FINALIZACIÓN
             self.unsaved_changes = False
             self.title("OpenTranscribe v2.0 Pro")
-            self.mostrar_alerta_oscura("Guardado", "Archivo guardado exitosamente.")
+            self.mostrar_alerta_oscura("Guardado", f"Archivo guardado exitosamente:\n{os.path.basename(filename)}")
 
         except Exception as e:
-            self.mostrar_alerta_oscura("Error", str(e))
+            print(f"Error guardando: {e}")
+            self.mostrar_alerta_oscura("Error", f"No se pudo guardar el archivo:\n{str(e)}")
 
     def open_find_replace_dialog(self):
         self.dialog = ctk.CTkToplevel(self)
