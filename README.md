@@ -1,7 +1,7 @@
 # OpenTranscribe 🎙️
 
 <p align="center">
-  <img src="https://github.com/AnabasaSoft/OpenTranscribe/blob/main/Logo.jpg" alt="OpenTranscribe Logo" width="200">
+  <img src="https://github.com/AnabasaSoft/OpenTranscribe/blob/main/Logo.jpg" alt="OpenTranscribe Logo" width="400">
 </p>
 
 Una aplicación de escritorio moderna y oscura para transcribir audio a texto utilizando la potencia de Whisper (C++).
@@ -27,7 +27,7 @@ Una aplicación de escritorio moderna y oscura para transcribir audio a texto ut
 
 - **Arch Linux (AUR):**
   ```bash
-  yay -S opentranscribe-bin
+  yay -S opentranscribe
   ```
 
 - **Debian/Ubuntu (.deb):**
