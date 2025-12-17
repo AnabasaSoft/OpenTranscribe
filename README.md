@@ -1,5 +1,9 @@
 # OpenTranscribe 🎙️
 
+<p align="center">
+  <img src="https://github.com/AnabasaSoft/OpenTranscribe/blob/main/Logo.jpg" alt="OpenTranscribe Logo" width="200">
+</p>
+
 Una aplicación de escritorio moderna y oscura para transcribir audio a texto utilizando la potencia de Whisper (C++).
 
 ![Captura de pantalla](https://github.com/AnabasaSoft/OpenTranscribe/blob/main/Captura.png)
@@ -16,10 +20,30 @@ Una aplicación de escritorio moderna y oscura para transcribir audio a texto ut
 2. **FFmpeg** instalado en el sistema.
    - Linux: `sudo apt install ffmpeg`
 3. **Whisper.cpp** - Motor de transcripción.
-4. **Zenity** - Para diálogos del sistema.
-   - Linux: `sudo apt install zenity`
 
 ## Instalación 📦
+
+### Desde paquetes precompilados
+
+- **Arch Linux (AUR):**
+  ```bash
+  yay -S opentranscribe-bin
+  ```
+
+- **Debian/Ubuntu (.deb):**
+  Descarga el paquete desde [Releases](https://github.com/AnabasaSoft/OpenTranscribe/releases) e instala:
+  ```bash
+  sudo dpkg -i opentranscribe_*.deb
+  sudo apt-get install -f
+  ```
+
+- **Fedora/RHEL (.rpm):**
+  Descarga el paquete desde [Releases](https://github.com/AnabasaSoft/OpenTranscribe/releases) e instala:
+  ```bash
+  sudo rpm -i opentranscribe_*.rpm
+  ```
+
+### Desde el código fuente
 
 1. Clona el repositorio:
    ```bash
@@ -47,3 +71,10 @@ La aplicación descargará automáticamente los modelos necesarios en tu carpeta
 ## Licencia 📄
 
 MIT License
+
+---
+
+## Contacto 📧
+
+- **Email:** anabasasoft@gmail.com
+- **Web:** [anabasasoft.github.io](https://anabasasoft.github.io)
