@@ -185,6 +185,9 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.btn_find = ctk.CTkButton(self.frame_bottom, text="🔍 Buscar", command=self.open_find_replace_dialog, fg_color="#333", width=80, height=28)
         self.btn_find.pack(side="left", padx=(0, 10))
 
+        self.btn_clear = ctk.CTkButton(self.frame_bottom, text="🗑️ Limpiar", command=self.limpiar_texto, fg_color="#333", width=80, height=28)
+        self.btn_clear.pack(side="left", padx=(0, 10))
+
         # Centro
         self.btn_sync = ctk.CTkButton(self.frame_bottom, text="🔄 Sincronizar Tiempos", command=self.sync_timestamps_manual, fg_color="#4a4a4a", width=140, height=28)
         self.btn_sync.pack(side="left")
@@ -259,40 +262,55 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
             self.lbl_progress_percent.configure(text="0%")
 
     def start_transcription(self):
-        # 1. Configuración común
+        # 1. Configuración básica
         srt_mode = self.switch_srt.get() == 1
         diarize_mode = self.switch_diarize.get() == 1
         model_name_ui = self.combo_models.get()
+        exists, filename_model = transcriber.check_model_exists(model_name_ui)
 
-        # 2. VERIFICACIÓN DE MODELO (Igual que antes)
-        exists, filename = transcriber.check_model_exists(model_name_ui)
-        if not exists:
-            msg = f"El modelo '{filename}' no está descargado.\n¿Deseas descargarlo ahora?"
-            resp = self.mostrar_confirmacion_oscura("Modelo Faltante", msg)
-            if resp:
-                # Nota: Si es batch, primero bajamos modelo, luego iniciamos batch
-                self.download_and_transcribe(filename, srt_mode, diarize_mode, model_name_ui, is_batch=self.is_batch_mode)
-            return
-
-        # 3. MODO BATCH vs NORMAL
+        # 2. LÓGICA MODO COLA (BATCH)
         if self.is_batch_mode:
-            # Preguntar formato UNA vez
+            # A) Preguntar FORMATO (Una vez para todos)
             target_ext = self.ask_export_format()
-            if not target_ext: return # Usuario canceló o cerró ventana
+            if not target_ext: return # Cancelado
 
-            self.prepare_ui_for_process()
-            self.btn_process.configure(text="Procesando Cola...")
+            # B) Preguntar DÓNDE GUARDAR (Una vez para todos)
+            # Si el usuario cancela o lo deja vacío, usaremos la carpeta de origen de cada archivo.
+            output_folder = filedialog.askdirectory(title="Seleccionar carpeta de destino (Cancelar = Misma carpeta que original)")
 
-            # Lanzar Hilo de Cola
-            threading.Thread(target=self.run_batch_process,
-                           args=(self.queue_files, model_name_ui, srt_mode, diarize_mode, target_ext),
-                           daemon=True).start()
+            # C) Comprobar MODELO y arrancar
+            if not exists:
+                # Si falta modelo: Descargar -> Y AUTOMÁTICAMENTE procesar cola
+                msg = f"El modelo '{filename_model}' no está descargado.\nSe descargará y luego comenzará la cola automáticamente."
+                resp = self.mostrar_confirmacion_oscura("Modelo Faltante", msg)
+                if resp:
+                    # Pasamos todos los datos necesarios para que arranque solo después
+                    self.download_and_transcribe(
+                        filename_model, srt_mode, diarize_mode, model_name_ui,
+                        is_batch=True, batch_args=(self.queue_files, target_ext, output_folder)
+                    )
+            else:
+                # Si el modelo ya está, arrancamos directo
+                self.prepare_ui_for_process()
+                self.btn_process.configure(text="Procesando Cola...")
+                threading.Thread(target=self.run_batch_process,
+                               args=(self.queue_files, model_name_ui, srt_mode, diarize_mode, target_ext, output_folder),
+                               daemon=True).start()
+
+        # 3. LÓGICA MODO INDIVIDUAL (Un solo archivo)
         else:
             if not self.selected_file_path: return
-            self.prepare_ui_for_process()
-            threading.Thread(target=self.run_process, args=(srt_mode, diarize_mode, model_name_ui), daemon=True).start()
 
-    def run_batch_process(self, file_list, model_name, srt_mode, diarize_mode, extension):
+            if not exists:
+                msg = f"El modelo '{filename_model}' no está descargado.\n¿Deseas descargarlo ahora?"
+                resp = self.mostrar_confirmacion_oscura("Modelo Faltante", msg)
+                if resp:
+                    self.download_and_transcribe(filename_model, srt_mode, diarize_mode, model_name_ui, is_batch=False)
+            else:
+                self.prepare_ui_for_process()
+                threading.Thread(target=self.run_process, args=(srt_mode, diarize_mode, model_name_ui), daemon=True).start()
+
+    def run_batch_process(self, file_list, model_name, srt_mode, diarize_mode, extension, output_folder=None):
         """Procesa la lista de archivos con una barra de progreso GLOBAL basada en el tiempo total."""
 
         # 1. FASE DE PREPARACIÓN: Calcular duración total de la cola
@@ -374,18 +392,13 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 diarize=diarize_mode
             )
 
-            # --- AL TERMINAR EL ARCHIVO ---
             if not transcriber.is_cancelled:
-                # 1. Guardar
+                # 1. Guardar (Ahora pasamos output_folder)
                 try:
-                    saved_path = self.auto_save_transcript(self.current_batch_text_accumulator, audio_file, extension)
+                    saved_path = self.auto_save_transcript(self.current_batch_text_accumulator, audio_file, extension, output_folder)
                     self.textbox.insert("end", f"✅ Guardado en: {os.path.basename(saved_path)}\n")
                 except Exception as e:
                     self.textbox.insert("end", f"❌ Error guardando: {e}\n")
-
-                # 2. Sumar el tiempo de este archivo al acumulado global
-                accumulated_time += current_file_duration
-                self.textbox.see("end")
 
             # Pequeña pausa para respirar
             time.sleep(1)
@@ -408,10 +421,47 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.unsaved_changes = True
         self.title("OpenTranscribe v2.0 Pro * (Trabajando)")
 
-    def download_and_transcribe(self, filename, srt_mode, diarize_mode, model_name_ui):
+    def download_and_transcribe(self, filename, srt_mode, diarize_mode, model_name_ui, is_batch=False, batch_args=None):
+        """Descarga el modelo y encadena la transcripción automáticamente (Individual o Cola)."""
         self.prepare_ui_for_process()
         self.btn_process.configure(text="Descargando...")
         self.title("OpenTranscribe (Descargando Modelo...)")
+
+        def thread_target():
+            try:
+                # 1. Descargar
+                self.textbox.insert("end", f"Iniciando descarga de {filename}...\n")
+                transcriber.download_model(filename, self.update_progress)
+                self.textbox.insert("end", "Descarga completada.\n\n")
+
+                # 2. Transición automática a la tarea principal
+                if is_batch and batch_args:
+                    # Desempaquetamos los argumentos: (lista, extensión, carpeta_salida)
+                    queue_files, target_ext, output_folder = batch_args
+
+                    self.textbox.insert("end", "Iniciando procesamiento de cola automáticamente...\n")
+                    # Llamamos directamente a la función de cola (ya estamos en un hilo, así que es seguro)
+                    self.run_batch_process(queue_files, model_name_ui, srt_mode, diarize_mode, target_ext, output_folder)
+
+                else:
+                    # Modo Individual
+                    self.textbox.insert("end", "Iniciando transcripción...\n")
+                    self.update_progress(0)
+                    transcriber.run_transcription(
+                        self.selected_file_path,
+                        model_name_ui,
+                        self.update_text_area,
+                        self.update_progress,
+                        with_timestamps=srt_mode,
+                        diarize=diarize_mode
+                    )
+                    self.after(0, lambda: [self.finish_transcription_ui(), self.sync_timestamps_from_text()])
+
+            except Exception as e:
+                self.textbox.insert("end", f"\nError crítico: {e}")
+                self.after(0, self.finish_transcription_ui)
+
+        threading.Thread(target=thread_target, daemon=True).start()
 
         def thread_target():
             try:
@@ -1129,19 +1179,26 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         dialog.wait_window(dialog)
         return self.selected_format
 
-    def auto_save_transcript(self, text_content, audio_path, extension):
+    def auto_save_transcript(self, text_content, audio_path, extension, output_folder=None):
         """
-        Guarda la transcripción automáticamente en la misma carpeta del audio original,
-        soportando todos los formatos (.docx, .txt, .srt, .vtt, .csv).
+        Guarda la transcripción.
+        Si output_folder tiene valor, guarda allí.
+        Si output_folder es None o vacío, guarda junto al audio original.
         """
         if not text_content.strip():
             return None
 
-        # 1. Generar nombre de archivo basado en el audio original
-        # Ejemplo: /home/user/Entrevista.mp3 -> /home/user/Entrevista_Transcribed.docx
-        folder = os.path.dirname(audio_path)
         base_name = os.path.splitext(os.path.basename(audio_path))[0]
-        filename = os.path.join(folder, f"{base_name}_Transcribed{extension}")
+
+        # DECISIÓN DE CARPETA
+        if output_folder and os.path.isdir(output_folder):
+            # Guardar en carpeta personalizada
+            target_folder = output_folder
+        else:
+            # Guardar junto al original
+            target_folder = os.path.dirname(audio_path)
+
+        filename = os.path.join(target_folder, f"{base_name}_Transcribed{extension}")
 
         try:
             # --- FASE A: PARSEO DEL TEXTO (Convertir texto plano a datos estructurados) ---
@@ -1250,6 +1307,27 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         except Exception as e:
             print(f"Error guardando automático ({extension}): {e}")
             return None
+
+    def limpiar_texto(self):
+        # 1. Debug: Imprimir en consola para asegurar que el botón reacciona
+        print("Botón limpiar pulsado...")
+
+        # 2. Preguntamos directamente, sin comprobar el contenido previo
+        confirmar = self.mostrar_confirmacion_oscura(
+            "Limpiar Transcripción",
+            "¿Estás seguro de que quieres borrar todo el texto?"
+        )
+
+        if confirmar:
+            # Borramos desde el inicio (1.0 es la primera línea en Tkinter) hasta el final
+            self.textbox.delete("1.0", "end")
+            self.textbox.insert("1.0", "El texto transcrito aparecerá aquí...\n")
+
+            # Reseteamos las variables internas
+            self.transcript_segments = []
+            self.unsaved_changes = False
+            self.title("OpenTranscribe v2.0")
+            print("Texto limpiado correctamente.")
 
 if __name__ == "__main__":
     app = OpenTranscribeApp()
