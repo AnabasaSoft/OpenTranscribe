@@ -116,7 +116,18 @@ def convert_to_wav(input_path):
 
     if os.path.exists(TEMP_WAV): os.remove(TEMP_WAV)
     cmd = [ffmpeg, "-i", input_path, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", "-y", TEMP_WAV]
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # --- INICIO DEL FIX ---
+    # Creamos una copia del entorno actual
+    env = os.environ.copy()
+
+    # Si estamos en un binario de PyInstaller, LD_LIBRARY_PATH apunta a la carpeta temporal.
+    # FFmpeg del sistema odia esto. Lo borramos SOLO para esta llamada.
+    if "LD_LIBRARY_PATH" in env:
+        del env["LD_LIBRARY_PATH"]
+
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+    # --- FIN DEL FIX ---
     if os.path.exists(TEMP_WAV): return TEMP_WAV
     raise Exception("Error al convertir audio.")
 
