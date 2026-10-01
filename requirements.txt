@@ -4,3 +4,4 @@ pygame
 Pillow
 python-docx
 pyinstaller
+certifi

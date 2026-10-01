@@ -62,6 +62,31 @@ def get_whisper_executable():
 def get_ffmpeg_executable():
     return shutil.which("ffmpeg")
 
+def system_env():
+    """Entorno para lanzar programas del sistema (ffmpeg).
+    En el ejecutable de PyInstaller, LD_LIBRARY_PATH apunta a las bibliotecas
+    empaquetadas y ffmpeg del sistema cargaría versiones incompatibles. PyInstaller
+    guarda el valor original en LD_LIBRARY_PATH_ORIG: lo restauramos (o quitamos
+    la variable si no existía). Fuera de PyInstaller no se toca nada."""
+    env = os.environ.copy()
+    if getattr(sys, 'frozen', False):
+        orig = env.pop("LD_LIBRARY_PATH_ORIG", None)
+        if orig is not None:
+            env["LD_LIBRARY_PATH"] = orig
+        else:
+            env.pop("LD_LIBRARY_PATH", None)
+    return env
+
+def ssl_context():
+    """Contexto SSL con verificación de certificados. El OpenSSL empaquetado por
+    PyInstaller puede no encontrar los certificados de la distribución, así que
+    se usa el almacén de certifi (incluido en el ejecutable) si está disponible."""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
 def get_model_filename(model_name_ui):
     mapa_modelos = {
         "Tiny (Muy rápido)": "ggml-tiny.bin",
@@ -85,15 +110,15 @@ def download_model(filename, progress_callback):
     dest_path = get_model_path(filename)
     if not url: raise Exception("URL de modelo no encontrada")
 
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    ctx = ssl_context()
 
     # Se descarga a un .part y solo se renombra al terminar: si se cancela o se
     # corta, no queda en MODELS_DIR un modelo a medias que parezca válido
     part_path = dest_path + ".part"
     try:
-        with urllib.request.urlopen(url, context=ctx) as response, open(part_path, 'wb') as out_file:
+        # timeout: sin él, una conexión colgada bloquearía read() para siempre
+        # y ni siquiera Cancelar podría pararla
+        with urllib.request.urlopen(url, context=ctx, timeout=30) as response, open(part_path, 'wb') as out_file:
             total_size = int(response.info().get('Content-Length', -1))
             downloaded = 0
             block_size = 8192
@@ -126,7 +151,8 @@ def get_audio_duration(file_path):
     if not ffmpeg: return 0
     try:
         cmd = [ffmpeg, "-i", file_path]
-        result = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True)
+        result = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True,
+                                encoding="utf-8", errors="replace", env=system_env())
         match = re.search(r"Duration: (\d{2}):(\d{2}):(\d{2}\.\d{2})", result.stderr)
         if match:
             h, m, s = map(float, match.groups())
@@ -141,25 +167,15 @@ def convert_to_wav(input_path):
     if os.path.exists(TEMP_WAV): os.remove(TEMP_WAV)
     cmd = [ffmpeg, "-i", input_path, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", "-y", TEMP_WAV]
 
-    # --- INICIO DEL FIX ---
-    # Creamos una copia del entorno actual
-    env = os.environ.copy()
-
-    # Si estamos en un binario de PyInstaller, LD_LIBRARY_PATH apunta a la carpeta temporal.
-    # FFmpeg del sistema odia esto. Lo borramos SOLO para esta llamada.
-    if "LD_LIBRARY_PATH" in env:
-        del env["LD_LIBRARY_PATH"]
-
     # Popen (no run) y registrado en current_process para que Cancelar pueda matarlo
     global current_process
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=system_env())
     current_process = proc
     try:
         if is_cancelled: proc.kill()  # cancelado justo antes de registrarlo
         proc.wait()
     finally:
         current_process = None
-    # --- FIN DEL FIX ---
     if is_cancelled: raise Cancelled()
     if os.path.exists(TEMP_WAV): return TEMP_WAV
     raise Exception("Error al convertir audio.")
