@@ -605,18 +605,15 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         if not filenames:
             return # Cancelado
 
-        # Convertimos a lista
-        filepaths = list(filenames)
-
-        if len(filepaths) == 1:
-            self.cargar_archivo_comun(filepaths[0])
-        else:
-            # Lógica de Cola
-            self.al_soltar_archivo(type('Event', (object,), {'data': " ".join(filepaths)})())
+        # Pasamos la lista tal cual: unirla en un string y volver a separarla
+        # rompería las rutas con espacios
+        self.cargar_archivos(list(filenames))
 
     def al_soltar_archivo(self, event):
-        filepaths = self.parse_dropped_files(event.data)
+        self.cargar_archivos(self.parse_dropped_files(event.data))
 
+    def cargar_archivos(self, filepaths):
+        """Carga 1 archivo (modo normal) o varios (modo cola)."""
         if not filepaths:
             return
 
