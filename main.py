@@ -33,6 +33,110 @@ def resource_path(relative_path):
 
     return os.path.join(base_path, relative_path)
 
+TIMESTAMP_PATTERN = re.compile(r"\[(\d{2}:\d{2}:\d{2}[\.,]\d{3}) --> (\d{2}:\d{2}:\d{2}[\.,]\d{3})\]")
+
+def parse_transcript(raw_content):
+    """Convierte el texto de la transcripción en una lista de segmentos
+    {start, end, text}. Las líneas sin marca de tiempo que no siguen a un
+    segmento (p. ej. transcripción sin "Modo Subtítulos") quedan con start/end vacíos."""
+    lines_data = []
+    current_seg = {"start": "", "end": "", "text": ""}
+
+    for line in raw_content.split('\n'):
+        match = TIMESTAMP_PATTERN.search(line)
+        if match:
+            # Guardar segmento previo
+            if current_seg["start"]:
+                lines_data.append(current_seg)
+
+            # Normalizar tiempos (usar punto internamente) y quitar la marca del texto
+            current_seg = {"start": match.group(1).replace(',', '.'),
+                           "end": match.group(2).replace(',', '.'),
+                           "text": TIMESTAMP_PATTERN.sub("", line).strip()}
+        elif line.strip():
+            if current_seg["start"]:
+                # Texto continuado del segmento actual
+                current_seg["text"] += " " + line.strip()
+            else:
+                # Texto sin tiempo
+                lines_data.append({"start": "", "end": "", "text": line.strip()})
+
+    # Añadir el último segmento
+    if current_seg["start"]:
+        lines_data.append(current_seg)
+    return lines_data
+
+def write_transcript(filename, ext, raw_content, heading):
+    """Escribe la transcripción en el formato que indica ext."""
+    lines_data = parse_transcript(raw_content)
+    timed = [item for item in lines_data if item["start"]]
+
+    # Sin marcas de tiempo no hay subtítulos posibles: mejor avisar que dejar un archivo vacío
+    if ext in (".srt", ".vtt") and not timed:
+        raise ValueError("El texto no tiene marcas de tiempo.\n"
+                         "Activa 'Modo Subtítulos' y vuelve a transcribir para exportar subtítulos.")
+
+    # --- A) MICROSOFT WORD (.docx) ---
+    if ext == ".docx" and HAS_DOCX:
+        doc = Document()
+        doc.add_heading(heading, 0)
+
+        for item in lines_data:
+            p = doc.add_paragraph()
+
+            # Tiempo en Azul
+            if item["start"]:
+                run_time = p.add_run(f"[{item['start']} - {item['end']}] ")
+                run_time.bold = True
+                run_time.font.color.rgb = RGBColor(0, 50, 150)
+
+            # Detección de Hablantes (Rojo)
+            text_content = item["text"]
+            parts = text_content.split(":", 1)
+            if "👤" in text_content and len(parts) > 1:
+                run_speaker = p.add_run(parts[0] + ":")
+                run_speaker.bold = True
+                run_speaker.font.color.rgb = RGBColor(200, 0, 0)
+                p.add_run(parts[1])
+            else:
+                p.add_run(text_content)
+
+        doc.save(filename)
+
+    # --- B) EXCEL / CSV (.csv) ---
+    elif ext == ".csv":
+        with open(filename, mode='w', newline='', encoding='utf-8-sig') as csv_file:
+            writer = csv.writer(csv_file, delimiter=';')
+            writer.writerow(['Inicio', 'Fin', 'Contenido'])
+            for item in lines_data:
+                writer.writerow([item["start"], item["end"], item["text"]])
+
+    # --- C) SUBTÍTULOS VTT (.vtt) ---
+    elif ext == ".vtt":
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write("WEBVTT\n\n")
+            for i, item in enumerate(timed, 1):
+                f.write(f"{i}\n")
+                f.write(f"{item['start']} --> {item['end']}\n")
+                f.write(f"{item['text']}\n\n")
+
+    # --- D) SUBTÍTULOS SRT (.srt) ---
+    elif ext == ".srt":
+        with open(filename, "w", encoding="utf-8") as f:
+            for i, item in enumerate(timed, 1):
+                f.write(f"{i}\n")
+                # SRT requiere coma en milisegundos
+                start_srt = item['start'].replace('.', ',')
+                end_srt = item['end'].replace('.', ',')
+                f.write(f"{start_srt} --> {end_srt}\n")
+                f.write(f"{item['text']}\n\n")
+
+    # --- E) TEXTO PLANO (.txt) ---
+    else:
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(raw_content)
+
+
 # Configuración inicial
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -326,6 +430,20 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def run_batch_process(self, file_list, model_name, srt_mode, diarize_mode, extension, output_folder=None):
         """Procesa la lista de archivos con una barra de progreso GLOBAL basada en el tiempo total."""
+        guardados, fallidos = [], []
+        try:
+            self._run_batch_loop(file_list, model_name, srt_mode, diarize_mode, extension, output_folder, guardados, fallidos)
+        except Exception as e:
+            self.append_text(f"\n❌ Error inesperado en la cola: {e}\n")
+            fallidos.append(("(cola)", str(e)))
+        finally:
+            # Siempre se cierra el trabajo, aunque algo falle: si no, is_processing
+            # se quedaría a True y la app no dejaría volver a transcribir
+            self.after(0, lambda: self._finish_batch(len(file_list), guardados, fallidos))
+
+    def _run_batch_loop(self, file_list, model_name, srt_mode, diarize_mode, extension, output_folder, guardados, fallidos):
+        # Los subtítulos necesitan marcas de tiempo aunque no esté activado "Modo Subtítulos"
+        with_timestamps = srt_mode or extension in (".srt", ".vtt")
 
         # 1. FASE DE PREPARACIÓN: Calcular duración total de la cola
         self.run_on_ui(lambda: self.textbox.delete("0.0", "end"))
@@ -386,21 +504,15 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     self.run_on_ui(_update_global)
 
             # --- EJECUCIÓN ---
-            # Variable para acumular texto solo de este archivo para el guardado
-            self.current_batch_text_accumulator = ""
-
-            def text_accumulator(text):
-                self.current_batch_text_accumulator += text
-                # Opcional: Si quieres que salga en pantalla en tiempo real:
-                # self.textbox.insert("end", text)
-                # self.textbox.see("end")
+            # Acumulamos solo el texto de este archivo para el guardado
+            text_parts = []
 
             error = transcriber.run_transcription(
                 audio_file,
                 model_name,
-                text_accumulator, # Usamos el acumulador limpio
+                text_parts.append,
                 batch_progress_callback, # Usamos el nuevo callback global
-                with_timestamps=srt_mode,
+                with_timestamps=with_timestamps,
                 diarize=diarize_mode
             )
 
@@ -408,26 +520,47 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 # El acumulador no se muestra en pantalla: hay que enseñar el error aquí
                 # y no guardarlo como si fuera la transcripción
                 self.append_text(f"❌ {error}\n")
+                fallidos.append((file_name, error))
             elif not transcriber.is_cancelled:
-                # 1. Guardar (Ahora pasamos output_folder)
                 try:
-                    saved_path = self.auto_save_transcript(self.current_batch_text_accumulator, audio_file, extension, output_folder)
+                    saved_path = self.auto_save_transcript("".join(text_parts), audio_file, extension, output_folder)
                     self.append_text(f"✅ Guardado en: {os.path.basename(saved_path)}\n")
+                    guardados.append(saved_path)
                 except Exception as e:
                     self.append_text(f"❌ Error guardando: {e}\n")
+                    fallidos.append((file_name, str(e)))
 
             accumulated_time += current_file_duration
 
             # Pequeña pausa para respirar
             time.sleep(1)
 
-        # 3. FINALIZACIÓN
-        self.after(0, lambda: [
-            self.finish_transcription_ui(),
-            self.progress_bar.set(1), # Asegurar 100% visual al final
-            self.lbl_progress_percent.configure(text="100%"),
-            self.mostrar_alerta_oscura("Cola Finalizada", f"Se han procesado {total_files} archivos correctamente.")
-        ])
+    def _finish_batch(self, total_files, guardados, fallidos):
+        """Resumen final de la cola (hilo principal)."""
+        cancelado = transcriber.is_cancelled
+        self.finish_transcription_ui(failed=not guardados and bool(fallidos) and not cancelado)
+
+        resumen = f"Guardados: {len(guardados)} de {total_files}"
+        if fallidos:
+            resumen += f"\nCon error: {len(fallidos)}"
+            for nombre, _ in fallidos[:5]:
+                resumen += f"\n  • {nombre}"
+            if len(fallidos) > 5:
+                resumen += f"\n  • ... y {len(fallidos) - 5} más (detalles en el texto)"
+
+        if cancelado:
+            titulo = "Cola Cancelada"
+            resumen += f"\nSin procesar: {total_files - len(guardados) - len(fallidos)}"
+        elif fallidos:
+            titulo = "Cola Finalizada con Errores"
+        else:
+            titulo = "Cola Finalizada"
+            self.progress_bar.set(1)
+            self.lbl_progress_percent.configure(text="100%")
+            self.title("OpenTranscribe (Cola finalizada)")
+
+        self.append_text(f"\n=== {titulo} ===\n{resumen}\n")
+        self.mostrar_alerta_oscura(titulo, resumen)
 
     def prepare_ui_for_process(self):
         self.is_processing = True
@@ -465,8 +598,9 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     self.run_batch_process(queue_files, model_name_ui, srt_mode, diarize_mode, target_ext, output_folder)
 
                 else:
-                    # Modo Individual
-                    self.append_text("Iniciando transcripción...\n")
+                    # Modo Individual: limpiamos los mensajes de la descarga para que
+                    # en el cuadro (y en lo que se guarde) quede solo la transcripción
+                    self.run_on_ui(lambda: self.textbox.delete("0.0", "end"))
                     self.update_progress(0)
                     error = transcriber.run_transcription(
                         input_file,
@@ -505,13 +639,15 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.btn_cancel.configure(state="disabled")
         if transcriber.is_cancelled:
             self.title("OpenTranscribe (Cancelado)")
+            self.lbl_progress_percent.configure(text="Cancelado")
         elif failed:
             self.progress_bar.set(0)
             self.lbl_progress_percent.configure(text="Error")
             self.title("OpenTranscribe (Error)")
-        elif "100%" not in self.lbl_progress_percent.cget("text") and not transcriber.is_cancelled:
-             self.progress_bar.set(1)
-             self.lbl_progress_percent.configure(text="100%")
+        else:
+            self.progress_bar.set(1)
+            self.lbl_progress_percent.configure(text="100%")
+            self.title("OpenTranscribe * (Terminado, sin guardar)")
 
     def parse_and_insert_line(self, text_line):
         # Limpiamos posibles espacios extra
@@ -795,114 +931,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         ext = os.path.splitext(filename)[1].lower()
 
         try:
-            # 3. PARSEO DEL TEXTO (Convertir texto plano a estructura de datos)
-            lines_data = []
-
-            # Regex para capturar tiempos: [00:00:00.000 --> 00:00:05.000]
-            timestamp_pattern = re.compile(r"\[(\d{2}:\d{2}:\d{2}[\.,]\d{3}) --> (\d{2}:\d{2}:\d{2}[\.,]\d{3})\]")
-
-            raw_lines = raw_content.split('\n')
-            current_seg = {"start": "", "end": "", "text": ""}
-
-            for line in raw_lines:
-                match = timestamp_pattern.search(line)
-                if match:
-                    # Guardar segmento previo
-                    if current_seg["start"]:
-                        lines_data.append(current_seg)
-
-                    # Normalizar tiempos (usar punto internamente)
-                    s_time = match.group(1).replace(',', '.')
-                    e_time = match.group(2).replace(',', '.')
-
-                    # Limpiar el texto de la marca de tiempo
-                    txt = timestamp_pattern.sub("", line).strip()
-
-                    current_seg = {"start": s_time, "end": e_time, "text": txt}
-                else:
-                    # Texto continuado (sin tiempo)
-                    if line.strip():
-                        if current_seg["start"]:
-                            current_seg["text"] += " " + line.strip()
-                        else:
-                            # Texto huérfano (headers, notas)
-                            lines_data.append({"start": "", "end": "", "text": line.strip()})
-
-            # Añadir el último segmento
-            if current_seg["start"] or current_seg["text"]:
-                lines_data.append(current_seg)
-
-            # 4. ESCRITURA SEGÚN EL FORMATO
-
-            # --- A) MICROSOFT WORD (.docx) ---
-            if ext == ".docx" and HAS_DOCX:
-                doc = Document()
-                doc.add_heading('Transcripción - OpenTranscribe', 0)
-
-                for item in lines_data:
-                    p = doc.add_paragraph()
-
-                    # Tiempo en Azul
-                    if item["start"]:
-                        run_time = p.add_run(f"[{item['start']} - {item['end']}] ")
-                        run_time.bold = True
-                        run_time.font.color.rgb = RGBColor(0, 50, 150)
-
-                    # Detección de Hablantes (Rojo)
-                    text_content = item["text"]
-                    if "👤" in text_content:
-                        parts = text_content.split(":", 1)
-                        if len(parts) > 1:
-                            run_speaker = p.add_run(parts[0] + ":")
-                            run_speaker.bold = True
-                            run_speaker.font.color.rgb = RGBColor(200, 0, 0)
-                            p.add_run(parts[1])
-                        else:
-                            p.add_run(text_content)
-                    else:
-                        p.add_run(text_content)
-
-                doc.save(filename)
-
-            # --- B) EXCEL / CSV (.csv) ---
-            elif ext == ".csv":
-                with open(filename, mode='w', newline='', encoding='utf-8-sig') as csv_file:
-                    writer = csv.writer(csv_file, delimiter=';')
-                    writer.writerow(['Inicio', 'Fin', 'Contenido'])
-                    for item in lines_data:
-                        if item["start"]:
-                            writer.writerow([item["start"], item["end"], item["text"]])
-
-            # --- C) SUBTÍTULOS VTT (.vtt) ---
-            elif ext == ".vtt":
-                with open(filename, "w", encoding="utf-8") as f:
-                    f.write("WEBVTT\n\n")
-                    counter = 1
-                    for item in lines_data:
-                        if item["start"]:
-                            f.write(f"{counter}\n")
-                            f.write(f"{item['start']} --> {item['end']}\n")
-                            f.write(f"{item['text']}\n\n")
-                            counter += 1
-
-            # --- D) SUBTÍTULOS SRT (.srt) ---
-            elif ext == ".srt":
-                with open(filename, "w", encoding="utf-8") as f:
-                    counter = 1
-                    for item in lines_data:
-                        if item["start"]:
-                            f.write(f"{counter}\n")
-                            # SRT requiere coma en milisegundos
-                            start_srt = item['start'].replace('.', ',')
-                            end_srt = item['end'].replace('.', ',')
-                            f.write(f"{start_srt} --> {end_srt}\n")
-                            f.write(f"{item['text']}\n\n")
-                            counter += 1
-
-            # --- E) TEXTO PLANO (.txt) ---
-            else:
-                with open(filename, "w", encoding="utf-8") as f:
-                    f.write(raw_content)
+            write_transcript(filename, ext, raw_content, 'Transcripción - OpenTranscribe')
 
             # 5. FINALIZACIÓN
             self.unsaved_changes = False
@@ -1180,12 +1209,13 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def auto_save_transcript(self, text_content, audio_path, extension, output_folder=None):
         """
-        Guarda la transcripción.
+        Guarda la transcripción y devuelve la ruta del archivo.
         Si output_folder tiene valor, guarda allí.
         Si output_folder es None o vacío, guarda junto al audio original.
+        Lanza una excepción si no puede guardar (el llamador la muestra).
         """
         if not text_content.strip():
-            return None
+            raise ValueError("la transcripción está vacía (¿el audio no tiene voz?)")
 
         base_name = os.path.splitext(os.path.basename(audio_path))[0]
 
@@ -1198,114 +1228,8 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
             target_folder = os.path.dirname(audio_path)
 
         filename = os.path.join(target_folder, f"{base_name}_Transcribed{extension}")
-
-        try:
-            # --- FASE A: PARSEO DEL TEXTO (Convertir texto plano a datos estructurados) ---
-            lines_data = []
-            raw_lines = text_content.split('\n')
-            # Regex para detectar tiempos: [00:00:00.000 --> 00:00:05.000]
-            timestamp_pattern = re.compile(r"\[(\d{2}:\d{2}:\d{2}[\.,]\d{3}) --> (\d{2}:\d{2}:\d{2}[\.,]\d{3})\]")
-
-            current_segment = {"start": "", "end": "", "text": ""}
-
-            for line in raw_lines:
-                match = timestamp_pattern.search(line)
-                if match:
-                    # Si encontramos una línea de tiempo, guardamos el segmento anterior y empezamos uno nuevo
-                    if current_segment["start"]:
-                        lines_data.append(current_segment)
-
-                    start_time = match.group(1).replace(',', '.')
-                    end_time = match.group(2).replace(',', '.')
-
-                    # Limpiamos el texto quitando la marca de tiempo
-                    text_part = timestamp_pattern.sub("", line).strip()
-
-                    current_segment = {"start": start_time, "end": end_time, "text": text_part}
-                else:
-                    # Si es una línea de texto continuado sin tiempo (o el header)
-                    if line.strip():
-                        if current_segment["start"]: # Solo añadimos si estamos dentro de un segmento válido
-                            current_segment["text"] += " " + line.strip()
-                        # Nota: Ignoramos el header de "Procesando archivo..." si no tiene timestamp
-
-            # Añadir el último segmento que quedó pendiente
-            if current_segment["start"]:
-                lines_data.append(current_segment)
-
-
-            # --- FASE B: GUARDADO SEGÚN EXTENSIÓN ---
-
-            # 1. WORD (.docx)
-            if extension == ".docx" and HAS_DOCX:
-                doc = Document()
-                doc.add_heading(f'Transcripción: {base_name}', 0)
-
-                for item in lines_data:
-                    p = doc.add_paragraph()
-
-                    # Estilo del tiempo (Azul)
-                    run_time = p.add_run(f"[{item['start']} - {item['end']}] ")
-                    run_time.bold = True
-                    run_time.font.color.rgb = RGBColor(0, 50, 150)
-
-                    # Estilo del texto (Detectando hablantes si los hay)
-                    text_content_seg = item["text"]
-                    if "👤" in text_content_seg:
-                        parts = text_content_seg.split(":", 1)
-                        if len(parts) > 1:
-                            run_speaker = p.add_run(parts[0] + ":")
-                            run_speaker.bold = True
-                            run_speaker.font.color.rgb = RGBColor(200, 0, 0) # Rojo oscuro
-                            p.add_run(parts[1])
-                        else:
-                            p.add_run(text_content_seg)
-                    else:
-                        p.add_run(text_content_seg)
-
-                doc.save(filename)
-
-            # 2. EXCEL / CSV (.csv)
-            elif extension == ".csv":
-                with open(filename, mode='w', newline='', encoding='utf-8-sig') as csv_file:
-                    writer = csv.writer(csv_file, delimiter=';')
-                    writer.writerow(['Inicio', 'Fin', 'Contenido'])
-                    for item in lines_data:
-                        writer.writerow([item["start"], item["end"], item["text"]])
-
-            # 3. SUBTÍTULOS VTT (.vtt)
-            elif extension == ".vtt":
-                with open(filename, "w", encoding="utf-8") as f:
-                    f.write("WEBVTT\n\n")
-                    for i, item in enumerate(lines_data):
-                        f.write(f"{i+1}\n")
-                        # VTT usa puntos para milisegundos (00:00:00.000)
-                        f.write(f"{item['start']} --> {item['end']}\n")
-                        f.write(f"{item['text']}\n\n")
-
-            # 4. SUBTÍTULOS SRT (.srt)
-            elif extension == ".srt":
-                with open(filename, "w", encoding="utf-8") as f:
-                    for i, item in enumerate(lines_data):
-                        f.write(f"{i+1}\n")
-                        # SRT usa comas para milisegundos (00:00:00,000)
-                        start_srt = item['start'].replace('.', ',')
-                        end_srt = item['end'].replace('.', ',')
-                        f.write(f"{start_srt} --> {end_srt}\n")
-                        f.write(f"{item['text']}\n\n")
-
-            # 5. TEXTO PLANO (.txt)
-            else:
-                # Para TXT guardamos todo el contenido raw (incluyendo headers si los hubiera)
-                # o reconstruimos limpio. Aquí guardamos el raw original para mantener consistencia.
-                with open(filename, "w", encoding="utf-8") as f:
-                    f.write(text_content)
-
-            return filename
-
-        except Exception as e:
-            print(f"Error guardando automático ({extension}): {e}")
-            return None
+        write_transcript(filename, extension, text_content, f'Transcripción: {base_name}')
+        return filename
 
     def limpiar_texto(self):
         # 1. Debug: Imprimir en consola para asegurar que el botón reacciona

@@ -249,12 +249,12 @@ def run_transcription(input_file, model_selection, callback_text, callback_progr
             return fail(f"\n[ERROR] El modelo {filename} está dañado o incompleto.\n"
                         f"Bórralo de {MODELS_DIR} y vuelve a descargarlo.")
 
+        # Sin mensaje "[LISTO]" en callback_text: ese texto es la transcripción y
+        # acabaría dentro del archivo guardado. El estado lo muestra la interfaz.
         callback_progress(1.0)
-        callback_text("\n[LISTO] Finalizado.")
         return None
 
     except Cancelled:
-        callback_text("\n[INFO] Cancelado.")
         callback_progress(0)
         return None
 
