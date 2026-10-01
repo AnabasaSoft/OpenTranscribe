@@ -73,6 +73,9 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
         self.queue_files = []
         self.is_batch_mode = False
+        # True desde que arranca un trabajo hasta que su hilo termina de verdad
+        # (no hasta que se pulsa Cancelar). Impide cargar archivos o lanzar otro trabajo.
+        self.is_processing = False
 
         # ============================================================
         # 1. TÍTULO
@@ -256,15 +259,20 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         # Usamos nuestra nueva alerta oscura
         confirm = self.mostrar_confirmacion_oscura("Cancelar", "¿Seguro que quieres detener la transcripción?")
 
-        if confirm:
+        # El trabajo pudo terminar mientras el diálogo estaba abierto
+        if confirm and self.is_processing:
             transcriber.stop_transcription()
+            # TRANSCRIBIR sigue desactivado hasta que el hilo termine de verdad:
+            # lo reactiva finish_transcription_ui
             self.btn_cancel.configure(state="disabled")
-            self.btn_process.configure(state="normal", text="Transcribir")
-            self.title("OpenTranscribe (Cancelado)")
+            self.btn_process.configure(text="Cancelando...")
+            self.title("OpenTranscribe (Cancelando...)")
             self.progress_bar.set(0)
             self.lbl_progress_percent.configure(text="0%")
 
     def start_transcription(self):
+        if self.is_processing: return
+
         # 1. Configuración básica
         srt_mode = self.switch_srt.get() == 1
         diarize_mode = self.switch_diarize.get() == 1
@@ -290,28 +298,31 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     # Pasamos todos los datos necesarios para que arranque solo después
                     self.download_and_transcribe(
                         filename_model, srt_mode, diarize_mode, model_name_ui,
-                        is_batch=True, batch_args=(self.queue_files, target_ext, output_folder)
+                        is_batch=True, batch_args=(list(self.queue_files), target_ext, output_folder)
                     )
             else:
                 # Si el modelo ya está, arrancamos directo
                 self.prepare_ui_for_process()
                 self.btn_process.configure(text="Procesando Cola...")
                 threading.Thread(target=self.run_batch_process,
-                               args=(self.queue_files, model_name_ui, srt_mode, diarize_mode, target_ext, output_folder),
+                               args=(list(self.queue_files), model_name_ui, srt_mode, diarize_mode, target_ext, output_folder),
                                daemon=True).start()
 
         # 3. LÓGICA MODO INDIVIDUAL (Un solo archivo)
         else:
-            if not self.selected_file_path: return
+            # Fijamos el archivo ahora: si se leyera self.selected_file_path al acabar
+            # la descarga, se transcribiría lo que estuviera cargado en ese momento
+            input_file = self.selected_file_path
+            if not input_file: return
 
             if not exists:
                 msg = f"El modelo '{filename_model}' no está descargado.\n¿Deseas descargarlo ahora?"
                 resp = self.mostrar_confirmacion_oscura("Modelo Faltante", msg)
                 if resp:
-                    self.download_and_transcribe(filename_model, srt_mode, diarize_mode, model_name_ui, is_batch=False)
+                    self.download_and_transcribe(filename_model, srt_mode, diarize_mode, model_name_ui, is_batch=False, input_file=input_file)
             else:
                 self.prepare_ui_for_process()
-                threading.Thread(target=self.run_process, args=(srt_mode, diarize_mode, model_name_ui), daemon=True).start()
+                threading.Thread(target=self.run_process, args=(input_file, srt_mode, diarize_mode, model_name_ui), daemon=True).start()
 
     def run_batch_process(self, file_list, model_name, srt_mode, diarize_mode, extension, output_folder=None):
         """Procesa la lista de archivos con una barra de progreso GLOBAL basada en el tiempo total."""
@@ -419,6 +430,9 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         ])
 
     def prepare_ui_for_process(self):
+        self.is_processing = True
+        transcriber.reset_cancellation()
+        self.btn_browse.configure(state="disabled")
         self.textbox.delete("0.0", "end")
         self.transcript_segments = []
         self.btn_process.configure(state="disabled", text="Procesando...")
@@ -428,7 +442,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.unsaved_changes = True
         self.title("OpenTranscribe v2.0 Pro * (Trabajando)")
 
-    def download_and_transcribe(self, filename, srt_mode, diarize_mode, model_name_ui, is_batch=False, batch_args=None):
+    def download_and_transcribe(self, filename, srt_mode, diarize_mode, model_name_ui, is_batch=False, batch_args=None, input_file=None):
         """Descarga el modelo y encadena la transcripción automáticamente (Individual o Cola)."""
         self.prepare_ui_for_process()
         self.btn_process.configure(text="Descargando...")
@@ -455,7 +469,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     self.append_text("Iniciando transcripción...\n")
                     self.update_progress(0)
                     error = transcriber.run_transcription(
-                        self.selected_file_path,
+                        input_file,
                         model_name_ui,
                         self.update_text_area,
                         self.update_progress,
@@ -464,18 +478,18 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     )
                     self.after(0, lambda: [self.finish_transcription_ui(failed=bool(error)), self.sync_timestamps_from_text()])
 
+            except transcriber.Cancelled:
+                self.append_text("\n[INFO] Descarga cancelada.")
+                self.after(0, self.finish_transcription_ui)
             except Exception as e:
                 self.append_text(f"\nError crítico: {e}")
                 self.after(0, lambda: self.finish_transcription_ui(failed=True))
 
         threading.Thread(target=thread_target, daemon=True).start()
 
-    def run_process(self, srt_mode, diarize_mode, model_name):
-        # ^^^ FÍJATE AQUÍ: Ahora aceptamos 'diarize_mode' entre los paréntesis
-
-        # Llamamos al backend pasándole el nuevo parámetro
+    def run_process(self, input_file, srt_mode, diarize_mode, model_name):
         error = transcriber.run_transcription(
-            self.selected_file_path,
+            input_file,
             model_name,
             self.update_text_area,
             self.update_progress,
@@ -485,9 +499,13 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.after(0, lambda: [self.finish_transcription_ui(failed=bool(error)), self.sync_timestamps_from_text()])
 
     def finish_transcription_ui(self, failed=False):
+        self.is_processing = False
+        self.btn_browse.configure(state="normal")
         self.btn_process.configure(state="normal", text="Transcribir")
         self.btn_cancel.configure(state="disabled")
-        if failed:
+        if transcriber.is_cancelled:
+            self.title("OpenTranscribe (Cancelado)")
+        elif failed:
             self.progress_bar.set(0)
             self.lbl_progress_percent.configure(text="Error")
             self.title("OpenTranscribe (Error)")
@@ -615,6 +633,10 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
     def cargar_archivos(self, filepaths):
         """Carga 1 archivo (modo normal) o varios (modo cola)."""
         if not filepaths:
+            return
+
+        if self.is_processing:
+            self.mostrar_alerta_oscura("Ocupado", "Espera a que termine el trabajo actual o cancélalo antes de cargar otro archivo.")
             return
 
         valid_exts = ['.mp3', '.wav', '.m4a', '.mp4', '.mkv', '.mov', '.avi', '.webm', '.flv']
@@ -951,13 +973,17 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
             salir = self.mostrar_confirmacion_oscura("Salir", "Tienes cambios sin guardar.\n¿Estás seguro de que quieres salir?",
                                                      texto_si="Sí, salir", texto_no="Cancelar")
             if salir:
-                try: pygame.mixer.quit()
-                except: pass
-                self.destroy()
+                self.cerrar_app()
         else:
-            try: pygame.mixer.quit()
-            except: pass
-            self.destroy()
+            self.cerrar_app()
+
+    def cerrar_app(self):
+        # Los hilos de trabajo son daemon y mueren con la app, pero ffmpeg/whisper
+        # son procesos aparte: si no se matan, siguen consumiendo CPU tras cerrar
+        transcriber.stop_transcription()
+        try: pygame.mixer.quit()
+        except: pass
+        self.destroy()
 
     def abrir_ayuda(self):
         # Crear ventana emergente más grande

@@ -30,6 +30,15 @@ MODEL_URLS = {
 current_process = None
 is_cancelled = False
 
+class Cancelled(Exception):
+    """El usuario ha cancelado el trabajo en curso."""
+
+def reset_cancellation():
+    """Se llama al empezar un trabajo nuevo (no en cada archivo de una cola,
+    o se perdería una cancelación pedida entre dos archivos)."""
+    global is_cancelled
+    is_cancelled = False
+
 def get_whisper_executable():
     """
     Busca el binario 'whisper-cli' incluido en la aplicación.
@@ -80,24 +89,37 @@ def download_model(filename, progress_callback):
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
 
-    with urllib.request.urlopen(url, context=ctx) as response, open(dest_path, 'wb') as out_file:
-        total_size = int(response.info().get('Content-Length', -1))
-        downloaded = 0
-        block_size = 8192
-        while True:
-            buffer = response.read(block_size)
-            if not buffer: break
-            downloaded += len(buffer)
-            out_file.write(buffer)
-            if total_size > 0: progress_callback(downloaded / total_size)
+    # Se descarga a un .part y solo se renombra al terminar: si se cancela o se
+    # corta, no queda en MODELS_DIR un modelo a medias que parezca válido
+    part_path = dest_path + ".part"
+    try:
+        with urllib.request.urlopen(url, context=ctx) as response, open(part_path, 'wb') as out_file:
+            total_size = int(response.info().get('Content-Length', -1))
+            downloaded = 0
+            block_size = 8192
+            while True:
+                if is_cancelled: raise Cancelled()
+                buffer = response.read(block_size)
+                if not buffer: break
+                downloaded += len(buffer)
+                out_file.write(buffer)
+                if total_size > 0: progress_callback(downloaded / total_size)
+        if total_size > 0 and downloaded != total_size:
+            raise Exception(f"Descarga incompleta ({downloaded} de {total_size} bytes)")
+        os.replace(part_path, dest_path)
+    finally:
+        if os.path.exists(part_path): os.remove(part_path)
 
 def stop_transcription():
-    global current_process, is_cancelled
+    """Pide la cancelación y mata el proceso externo en curso (ffmpeg o whisper).
+    current_process lo pone a None el hilo de trabajo, no esta función, para no
+    dejarlo sin referencia mientras aún lo está leyendo."""
+    global is_cancelled
     is_cancelled = True
-    if current_process:
-        try: current_process.kill()
+    proc = current_process
+    if proc:
+        try: proc.kill()
         except: pass
-        current_process = None
 
 def get_audio_duration(file_path):
     ffmpeg = get_ffmpeg_executable()
@@ -128,8 +150,17 @@ def convert_to_wav(input_path):
     if "LD_LIBRARY_PATH" in env:
         del env["LD_LIBRARY_PATH"]
 
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+    # Popen (no run) y registrado en current_process para que Cancelar pueda matarlo
+    global current_process
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+    current_process = proc
+    try:
+        if is_cancelled: proc.kill()  # cancelado justo antes de registrarlo
+        proc.wait()
+    finally:
+        current_process = None
     # --- FIN DEL FIX ---
+    if is_cancelled: raise Cancelled()
     if os.path.exists(TEMP_WAV): return TEMP_WAV
     raise Exception("Error al convertir audio.")
 
@@ -152,8 +183,11 @@ def run_transcription(input_file, model_selection, callback_text, callback_progr
     if not os.path.exists(model_path):
         return fail(f"[ERROR] Modelo no encontrado: {model_path}")
 
+    # is_cancelled NO se reinicia aquí: lo hace reset_cancellation() al empezar el
+    # trabajo, para que una cancelación durante la descarga o entre archivos se respete
+    proc = None
     try:
-        is_cancelled = False
+        if is_cancelled: raise Cancelled()
         total_duration = get_audio_duration(input_file)
         wav_path = convert_to_wav(input_file)
 
@@ -170,6 +204,7 @@ def run_transcription(input_file, model_selection, callback_text, callback_progr
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
                                 encoding="utf-8", errors="replace")
         current_process = proc
+        if is_cancelled: proc.kill()  # cancelado entre ffmpeg y whisper
 
         # stderr se vacía en un hilo aparte: si nadie lo lee y whisper escribe más de
         # lo que cabe en la tubería (~64 KB), el proceso se queda bloqueado.
@@ -201,13 +236,7 @@ def run_transcription(input_file, model_selection, callback_text, callback_progr
                 if "system_info" not in line and "main:" not in line:
                     callback_text(line)
 
-        if os.path.exists(TEMP_WAV): os.remove(TEMP_WAV)
-        current_process = None
-
-        if is_cancelled:
-            callback_text("\n[INFO] Cancelado.")
-            callback_progress(0)
-            return None
+        if is_cancelled: raise Cancelled()
 
         returncode = proc.wait()
         stderr_thread.join(timeout=2)
@@ -224,5 +253,18 @@ def run_transcription(input_file, model_selection, callback_text, callback_progr
         callback_text("\n[LISTO] Finalizado.")
         return None
 
+    except Cancelled:
+        callback_text("\n[INFO] Cancelado.")
+        callback_progress(0)
+        return None
+
     except Exception as e:
         return fail(f"\n[ERROR]: {str(e)}")
+
+    finally:
+        # Nunca dejar un whisper huérfano, salgamos por donde salgamos
+        if proc and proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        current_process = None
+        if os.path.exists(TEMP_WAV): os.remove(TEMP_WAV)
