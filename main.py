@@ -206,7 +206,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
     # LÓGICA DE LA APLICACIÓN (SIN CAMBIOS FUNCIONALES)
     # ==========================================================
 
-    def mostrar_confirmacion_oscura(self, titulo, mensaje):
+    def mostrar_confirmacion_oscura(self, titulo, mensaje, texto_si="Sí", texto_no="No"):
         # Crear ventana emergente oscura
         dialog = ctk.CTkToplevel(self)
         dialog.title(titulo)
@@ -236,15 +236,18 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
             dialog.destroy()
 
         # Botones Sí/No estilizados
-        btn_yes = ctk.CTkButton(frame_btns, text="Sí", command=on_yes, fg_color="#8b0000", hover_color="#500000", width=80)
+        btn_yes = ctk.CTkButton(frame_btns, text=texto_si, command=on_yes, fg_color="#8b0000", hover_color="#500000", width=100)
         btn_yes.pack(side="left", padx=10)
 
-        btn_no = ctk.CTkButton(frame_btns, text="No", command=on_no, fg_color="gray", hover_color="#555", width=80)
+        btn_no = ctk.CTkButton(frame_btns, text=texto_no, command=on_no, fg_color="gray", hover_color="#555", width=100)
         btn_no.pack(side="right", padx=10)
 
-        # Bloquear la ventana principal hasta que se responda
+        # Bloquear la ventana principal hasta que se responda.
+        # En Linux grab_set falla si la ventana aún no es visible, de ahí el update()
         dialog.transient(self)
-        dialog.grab_set()
+        dialog.update()
+        try: dialog.grab_set()
+        except: pass
         self.wait_window(dialog)
 
         return self.respuesta_usuario
@@ -314,8 +317,8 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         """Procesa la lista de archivos con una barra de progreso GLOBAL basada en el tiempo total."""
 
         # 1. FASE DE PREPARACIÓN: Calcular duración total de la cola
-        self.textbox.delete("0.0", "end")
-        self.textbox.insert("0.0", "⏳ Analizando duración total de la cola...\n")
+        self.run_on_ui(lambda: self.textbox.delete("0.0", "end"))
+        self.append_text("⏳ Analizando duración total de la cola...\n")
 
         total_batch_duration = 0
         files_durations = {}
@@ -329,7 +332,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         total_files = len(file_list)
         accumulated_time = 0 # Tiempo acumulado de los archivos ya terminados
 
-        self.textbox.insert("end", f"Total a procesar: {time.strftime('%H:%M:%S', time.gmtime(total_batch_duration))}\n\n")
+        self.append_text(f"Total a procesar: {time.strftime('%H:%M:%S', time.gmtime(total_batch_duration))}\n\n")
 
         # 2. BUCLE DE PROCESAMIENTO
         for index, audio_file in enumerate(file_list):
@@ -344,11 +347,9 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
             msg_header += f"⏱️ Duración: {time.strftime('%M:%S', time.gmtime(current_file_duration))}\n"
 
             # Escribimos en el textbox sin borrar lo anterior para tener un historial
-            # O si prefieres borrar: self.textbox.delete("0.0", "end")
-            self.textbox.insert("end", "\n" + msg_header)
-            self.textbox.see("end") # Auto-scroll al fondo
+            self.append_text("\n" + msg_header)
 
-            self.title(f"OpenTranscribe (Archivo {index + 1} de {total_files})")
+            self.run_on_ui(self.title, f"OpenTranscribe (Archivo {index + 1} de {total_files})")
 
             # --- CALLBACK INTELIGENTE PARA LA BARRA GLOBAL ---
             def batch_progress_callback(local_percent):
@@ -366,12 +367,12 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     # Porcentaje global (0.0 a 1.0)
                     global_percent = total_seconds_done / total_batch_duration
 
-                    # Actualizamos la barra
-                    self.update_progress(global_percent)
-
-                    # Actualizamos el texto del porcentaje para que sea informativo
-                    percent_text = f"{int(global_percent * 100)}% (Total)"
-                    self.lbl_progress_percent.configure(text=percent_text)
+                    # Barra y texto en una sola llamada al hilo principal, para que
+                    # el "(Total)" no lo pise después el texto de _update_progress_gui
+                    def _update_global():
+                        self.progress_bar.set(global_percent)
+                        self.lbl_progress_percent.configure(text=f"{int(global_percent * 100)}% (Total)")
+                    self.run_on_ui(_update_global)
 
             # --- EJECUCIÓN ---
             # Variable para acumular texto solo de este archivo para el guardado
@@ -396,9 +397,11 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 # 1. Guardar (Ahora pasamos output_folder)
                 try:
                     saved_path = self.auto_save_transcript(self.current_batch_text_accumulator, audio_file, extension, output_folder)
-                    self.textbox.insert("end", f"✅ Guardado en: {os.path.basename(saved_path)}\n")
+                    self.append_text(f"✅ Guardado en: {os.path.basename(saved_path)}\n")
                 except Exception as e:
-                    self.textbox.insert("end", f"❌ Error guardando: {e}\n")
+                    self.append_text(f"❌ Error guardando: {e}\n")
+
+            accumulated_time += current_file_duration
 
             # Pequeña pausa para respirar
             time.sleep(1)
@@ -430,22 +433,22 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         def thread_target():
             try:
                 # 1. Descargar
-                self.textbox.insert("end", f"Iniciando descarga de {filename}...\n")
+                self.append_text(f"Iniciando descarga de {filename}...\n")
                 transcriber.download_model(filename, self.update_progress)
-                self.textbox.insert("end", "Descarga completada.\n\n")
+                self.append_text("Descarga completada.\n\n")
 
                 # 2. Transición automática a la tarea principal
                 if is_batch and batch_args:
                     # Desempaquetamos los argumentos: (lista, extensión, carpeta_salida)
                     queue_files, target_ext, output_folder = batch_args
 
-                    self.textbox.insert("end", "Iniciando procesamiento de cola automáticamente...\n")
+                    self.append_text("Iniciando procesamiento de cola automáticamente...\n")
                     # Llamamos directamente a la función de cola (ya estamos en un hilo, así que es seguro)
                     self.run_batch_process(queue_files, model_name_ui, srt_mode, diarize_mode, target_ext, output_folder)
 
                 else:
                     # Modo Individual
-                    self.textbox.insert("end", "Iniciando transcripción...\n")
+                    self.append_text("Iniciando transcripción...\n")
                     self.update_progress(0)
                     transcriber.run_transcription(
                         self.selected_file_path,
@@ -458,33 +461,8 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     self.after(0, lambda: [self.finish_transcription_ui(), self.sync_timestamps_from_text()])
 
             except Exception as e:
-                self.textbox.insert("end", f"\nError crítico: {e}")
+                self.append_text(f"\nError crítico: {e}")
                 self.after(0, self.finish_transcription_ui)
-
-        threading.Thread(target=thread_target, daemon=True).start()
-
-        def thread_target():
-            try:
-                # 1. Descargar
-                self.textbox.insert("end", f"Iniciando descarga de {filename}...\n")
-                transcriber.download_model(filename, self.update_progress)
-                self.textbox.insert("end", "Descarga completada. Iniciando transcripción...\n\n")
-
-                # 2. Transcribir (Ahora que ya existe)
-                # Reiniciamos barra para la transcripción
-                self.update_progress(0)
-                transcriber.run_transcription(
-                    self.selected_file_path,
-                    model_name_ui,
-                    self.update_text_area,
-                    self.update_progress,
-                    with_timestamps=srt_mode,
-                    diarize=diarize_mode
-                )
-            except Exception as e:
-                self.textbox.insert("end", f"\nError en descarga: {e}")
-            finally:
-                self.after(0, lambda: [self.finish_transcription_ui(), self.sync_timestamps_from_text()])
 
         threading.Thread(target=thread_target, daemon=True).start()
 
@@ -732,8 +710,21 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 self.btn_play.configure(text="⏸ Pausa", fg_color="#555")
                 self.update_audio_slider_loop()
 
+    def run_on_ui(self, func, *args):
+        """Ejecuta func en el hilo principal. Tkinter no es thread-safe, así que
+        los hilos de trabajo nunca deben tocar widgets directamente."""
+        self.after(0, lambda: func(*args))
+
+    def append_text(self, text):
+        """Añade texto al final del textbox; seguro desde cualquier hilo."""
+        def _append():
+            self.textbox.insert("end", text)
+            self.textbox.see("end")
+        self.run_on_ui(_append)
+
     def update_text_area(self, text):
-        self.parse_and_insert_line(text)
+        # Lo llama transcriber desde el hilo de trabajo
+        self.run_on_ui(self.parse_and_insert_line, text)
 
     def update_progress(self, progress_float):
         self.after(0, lambda: self._update_progress_gui(progress_float))
@@ -942,30 +933,6 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         except: pass
         padre.wait_window(popup)
 
-    def mostrar_confirmacion_oscura(self, titulo, mensaje):
-        dialog = ctk.CTkToplevel(self)
-        dialog.title(titulo)
-        dialog.geometry("350x180")
-        dialog.resizable(False, False)
-        ctk.CTkLabel(dialog, text=mensaje, font=("Roboto", 14), wraplength=300).pack(pady=30, padx=20)
-        frame_btns = ctk.CTkFrame(dialog, fg_color="transparent")
-        frame_btns.pack(pady=10)
-        self.respuesta_usuario = False
-        def on_yes():
-            self.respuesta_usuario = True
-            dialog.destroy()
-        def on_no():
-            self.respuesta_usuario = False
-            dialog.destroy()
-        ctk.CTkButton(frame_btns, text="Sí, salir", command=on_yes, fg_color="red", hover_color="#800000", width=100).pack(side="left", padx=10)
-        ctk.CTkButton(frame_btns, text="Cancelar", command=on_no, fg_color="gray", width=100).pack(side="right", padx=10)
-        dialog.attributes("-topmost", True)
-        dialog.update()
-        try: dialog.grab_set()
-        except: pass
-        self.wait_window(dialog)
-        return self.respuesta_usuario
-
     def mark_as_modified(self, event=None):
         keys_to_ignore = ["Control_L", "Control_R", "Alt_L", "Shift_L", "Up", "Down", "Left", "Right"]
         if event and event.keysym in keys_to_ignore: return
@@ -976,7 +943,8 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
     def on_closing(self):
         if self.unsaved_changes:
             # Usamos nuestra nueva alerta oscura
-            salir = self.mostrar_confirmacion_oscura("Salir", "Tienes cambios sin guardar.\n¿Estás seguro de que quieres salir?")
+            salir = self.mostrar_confirmacion_oscura("Salir", "Tienes cambios sin guardar.\n¿Estás seguro de que quieres salir?",
+                                                     texto_si="Sí, salir", texto_no="Cancelar")
             if salir:
                 try: pygame.mixer.quit()
                 except: pass

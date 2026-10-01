@@ -20,3 +20,6 @@ actualiza.sh
 # Ignoramos archivos de sistema
 .DS_Store
 Thumbs.db
+.serena/
+.claude/
+*.md
