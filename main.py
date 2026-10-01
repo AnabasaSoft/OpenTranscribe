@@ -384,7 +384,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 # self.textbox.insert("end", text)
                 # self.textbox.see("end")
 
-            transcriber.run_transcription(
+            error = transcriber.run_transcription(
                 audio_file,
                 model_name,
                 text_accumulator, # Usamos el acumulador limpio
@@ -393,7 +393,11 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 diarize=diarize_mode
             )
 
-            if not transcriber.is_cancelled:
+            if error:
+                # El acumulador no se muestra en pantalla: hay que enseñar el error aquí
+                # y no guardarlo como si fuera la transcripción
+                self.append_text(f"❌ {error}\n")
+            elif not transcriber.is_cancelled:
                 # 1. Guardar (Ahora pasamos output_folder)
                 try:
                     saved_path = self.auto_save_transcript(self.current_batch_text_accumulator, audio_file, extension, output_folder)
@@ -450,7 +454,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     # Modo Individual
                     self.append_text("Iniciando transcripción...\n")
                     self.update_progress(0)
-                    transcriber.run_transcription(
+                    error = transcriber.run_transcription(
                         self.selected_file_path,
                         model_name_ui,
                         self.update_text_area,
@@ -458,11 +462,11 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
                         with_timestamps=srt_mode,
                         diarize=diarize_mode
                     )
-                    self.after(0, lambda: [self.finish_transcription_ui(), self.sync_timestamps_from_text()])
+                    self.after(0, lambda: [self.finish_transcription_ui(failed=bool(error)), self.sync_timestamps_from_text()])
 
             except Exception as e:
                 self.append_text(f"\nError crítico: {e}")
-                self.after(0, self.finish_transcription_ui)
+                self.after(0, lambda: self.finish_transcription_ui(failed=True))
 
         threading.Thread(target=thread_target, daemon=True).start()
 
@@ -470,7 +474,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         # ^^^ FÍJATE AQUÍ: Ahora aceptamos 'diarize_mode' entre los paréntesis
 
         # Llamamos al backend pasándole el nuevo parámetro
-        transcriber.run_transcription(
+        error = transcriber.run_transcription(
             self.selected_file_path,
             model_name,
             self.update_text_area,
@@ -478,12 +482,16 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
             with_timestamps=srt_mode,
             diarize=diarize_mode # <--- Se lo pasamos a transcriber.py
         )
-        self.after(0, lambda: [self.finish_transcription_ui(), self.sync_timestamps_from_text()])
+        self.after(0, lambda: [self.finish_transcription_ui(failed=bool(error)), self.sync_timestamps_from_text()])
 
-    def finish_transcription_ui(self):
+    def finish_transcription_ui(self, failed=False):
         self.btn_process.configure(state="normal", text="Transcribir")
         self.btn_cancel.configure(state="disabled")
-        if "100%" not in self.lbl_progress_percent.cget("text") and not transcriber.is_cancelled:
+        if failed:
+            self.progress_bar.set(0)
+            self.lbl_progress_percent.configure(text="Error")
+            self.title("OpenTranscribe (Error)")
+        elif "100%" not in self.lbl_progress_percent.cget("text") and not transcriber.is_cancelled:
              self.progress_bar.set(1)
              self.lbl_progress_percent.configure(text="100%")
 

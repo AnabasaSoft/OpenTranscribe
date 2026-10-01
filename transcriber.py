@@ -1,4 +1,6 @@
 import os
+import collections
+import threading
 import subprocess
 import re
 import sys
@@ -132,20 +134,23 @@ def convert_to_wav(input_path):
     raise Exception("Error al convertir audio.")
 
 def run_transcription(input_file, model_selection, callback_text, callback_progress, with_timestamps=False, diarize=False):
+    """Devuelve None si todo va bien (o se cancela) y el mensaje de error si falla."""
     global current_process, is_cancelled
+
+    def fail(msg):
+        callback_text(msg)
+        return msg.strip()
 
     whisper_bin = get_whisper_executable()
 
     # Verificación estricta: Si no está el binario, es error crítico
     if not whisper_bin:
-        callback_text("[ERROR CRÍTICO] No se encontró el archivo 'whisper-cli' interno.\nReinstala la aplicación.")
-        return
+        return fail("[ERROR CRÍTICO] No se encontró el archivo 'whisper-cli' interno.\nReinstala la aplicación.")
 
     filename = get_model_filename(model_selection)
     model_path = get_model_path(filename)
     if not os.path.exists(model_path):
-        callback_text(f"[ERROR] Modelo no encontrado: {model_path}")
-        return
+        return fail(f"[ERROR] Modelo no encontrado: {model_path}")
 
     try:
         is_cancelled = False
@@ -162,13 +167,31 @@ def run_transcription(input_file, model_selection, callback_text, callback_progr
             os.chmod(whisper_bin, st.st_mode | 0o111) # +x
         except: pass
 
-        current_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
+                                encoding="utf-8", errors="replace")
+        current_process = proc
+
+        # stderr se vacía en un hilo aparte: si nadie lo lee y whisper escribe más de
+        # lo que cabe en la tubería (~64 KB), el proceso se queda bloqueado.
+        # Solo guardamos las últimas líneas, que son las que explican un fallo.
+        stderr_tail = collections.deque(maxlen=15)
+        # Con un modelo truncado (descarga a medias) whisper.cpp no falla: lo trata
+        # como "modelo vacío de pruebas", no transcribe nada y sale con código 0
+        model_empty = False
+        def drain_stderr():
+            nonlocal model_empty
+            for err_line in proc.stderr:
+                if "no tensors loaded" in err_line: model_empty = True
+                stderr_tail.append(err_line.rstrip())
+        stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+        stderr_thread.start()
+
         timestamp_pattern = re.compile(r"\[(\d{2}):(\d{2}):(\d{2}\.\d{3})")
 
         while True:
             if is_cancelled: break
-            line = current_process.stdout.readline()
-            if not line and current_process.poll() is not None: break
+            line = proc.stdout.readline()
+            if not line and proc.poll() is not None: break
             if line:
                 match = timestamp_pattern.search(line)
                 if match and total_duration > 0:
@@ -184,9 +207,22 @@ def run_transcription(input_file, model_selection, callback_text, callback_progr
         if is_cancelled:
             callback_text("\n[INFO] Cancelado.")
             callback_progress(0)
-        else:
-            callback_progress(1.0)
-            callback_text("\n[LISTO] Finalizado.")
+            return None
+
+        returncode = proc.wait()
+        stderr_thread.join(timeout=2)
+        if returncode != 0:
+            detalle = "\n".join(stderr_tail) or "(whisper-cli no dio detalles)"
+            callback_progress(0)
+            return fail(f"\n[ERROR] whisper-cli terminó con código {returncode}:\n{detalle}")
+        if model_empty:
+            callback_progress(0)
+            return fail(f"\n[ERROR] El modelo {filename} está dañado o incompleto.\n"
+                        f"Bórralo de {MODELS_DIR} y vuelve a descargarlo.")
+
+        callback_progress(1.0)
+        callback_text("\n[LISTO] Finalizado.")
+        return None
 
     except Exception as e:
-        callback_text(f"\n[ERROR]: {str(e)}")
+        return fail(f"\n[ERROR]: {str(e)}")
