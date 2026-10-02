@@ -155,6 +155,39 @@ jobs:
 
         mv *.rpm OpenTranscribe-linux-x64.rpm
 
+    # 10b. Crear AppImage (cualquier distribución, sin instalar)
+    - name: Build AppImage
+      run: |
+        # appimagetool mantenido (sucesor de AppImageKit), versión fija. Su runtime
+        # no necesita libfuse2 instalado en el equipo del usuario.
+        wget -q https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+        chmod +x appimagetool-x86_64.AppImage
+        # En el runner no hay FUSE: se extrae y se usa sin montarlo
+        ./appimagetool-x86_64.AppImage --appimage-extract >/dev/null
+
+        APPDIR=OpenTranscribe.AppDir
+        mkdir -p $APPDIR/usr/lib $APPDIR/usr/share/applications $APPDIR/usr/share/icons/hicolor/256x256/apps
+        cp -a dist/OpenTranscribe $APPDIR/usr/lib/opentranscribe
+
+        # .desktop e icono: en la raíz del AppDir (los exige appimagetool) y en usr/share
+        sed -e 's|^Exec=.*|Exec=OpenTranscribe %f|' \
+          package_root/usr/share/applications/opentranscribe.desktop > $APPDIR/opentranscribe.desktop
+        cp $APPDIR/opentranscribe.desktop $APPDIR/usr/share/applications/
+        cp icon.png $APPDIR/opentranscribe.png
+        cp icon.png $APPDIR/usr/share/icons/hicolor/256x256/apps/opentranscribe.png
+
+        # AppRun: lanza el ejecutable de PyInstaller. No se toca LD_LIBRARY_PATH:
+        # PyInstaller ya gestiona sus bibliotecas y la app restaura el valor
+        # original para ffmpeg, whisper y el navegador
+        cat > $APPDIR/AppRun <<'APPRUN'
+        #!/bin/sh
+        HERE="$(dirname "$(readlink -f "$0")")"
+        exec "$HERE/usr/lib/opentranscribe/OpenTranscribe" "$@"
+        APPRUN
+        chmod +x $APPDIR/AppRun
+
+        ARCH=x86_64 ./squashfs-root/AppRun --no-appstream $APPDIR OpenTranscribe-x86_64.AppImage
+
     # 11. Subir los artefactos a la acción (para descargarlos manual)
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
@@ -164,6 +197,7 @@ jobs:
           OpenTranscribe-linux-x64.tar.gz
           OpenTranscribe-linux-x64.deb
           OpenTranscribe-linux-x64.rpm
+          OpenTranscribe-x86_64.AppImage
 
     # 12. Publicar Release (Opcional - crea la release en GitHub automáticamente)
     - name: Release
@@ -174,3 +208,4 @@ jobs:
           OpenTranscribe-linux-x64.tar.gz
           OpenTranscribe-linux-x64.deb
           OpenTranscribe-linux-x64.rpm
+          OpenTranscribe-x86_64.AppImage

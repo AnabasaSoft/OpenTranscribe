@@ -70,7 +70,14 @@ Descarga el paquete desde [Releases](https://github.com/AnabasaSoft/OpenTranscri
   ```
   Basta con el FFmpeg de los repositorios oficiales: OpenTranscribe solo necesita leer el audio, y ese FFmpeg decodifica AAC, MP3, Opus, Vorbis o FLAC, también dentro de vídeos MP4 o MKV. No hace falta Packman.
 
-- **Sin instalar (cualquier distribución):**
+- **AppImage (cualquier distribución, sin instalar):**
+  ```bash
+  chmod +x OpenTranscribe-x86_64.AppImage
+  ./OpenTranscribe-x86_64.AppImage
+  ```
+  Un solo archivo que funciona en cualquier distribución. Solo necesita tener **FFmpeg** instalado.
+
+- **Carpeta comprimida (sin instalar):**
   ```bash
   tar xzf OpenTranscribe-linux-x64.tar.gz
   ./OpenTranscribe/OpenTranscribe
