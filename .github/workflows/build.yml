@@ -110,7 +110,7 @@ jobs:
         Icon=opentranscribe
         Terminal=false
         Type=Application
-        Categories=AudioVideo;Audio;Utility;
+        Categories=AudioVideo;Audio;
         MimeType=audio/mpeg;audio/x-wav;video/mp4;video/x-matroska;
         Keywords=transcription;whisper;subtitles;
         StartupNotify=true

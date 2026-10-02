@@ -76,6 +76,7 @@ Descarga el paquete desde [Releases](https://github.com/AnabasaSoft/OpenTranscri
   ./OpenTranscribe-x86_64.AppImage
   ```
   Un solo archivo que funciona en cualquier distribución. Solo necesita tener **FFmpeg** instalado.
+  Si tu sistema no tiene FUSE (poco habitual en escritorio), ejecútala con `./OpenTranscribe-x86_64.AppImage --appimage-extract-and-run`.
 
 - **Carpeta comprimida (sin instalar):**
   ```bash
