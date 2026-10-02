@@ -42,7 +42,7 @@
 - **FFmpeg** instalado en el sistema:
   - Debian/Ubuntu: `sudo apt install ffmpeg`
   - Fedora: `sudo dnf install ffmpeg` (desde RPM Fusion)
-  - openSUSE: `sudo zypper install ffmpeg` (desde Packman, para tener todos los códecs)
+  - openSUSE: `sudo zypper install ffmpeg` (el de los repositorios oficiales es suficiente)
 - Para ejecutar desde el código fuente: **Python 3.10+**, `git`, `cmake` y `g++`.
 
 ---
@@ -67,7 +67,7 @@ Descarga el paquete desde [Releases](https://github.com/AnabasaSoft/OpenTranscri
   ```bash
   sudo zypper install ./OpenTranscribe-linux-x64.rpm
   ```
-  FFmpeg completo está en el repositorio de [Packman](https://en.opensuse.org/Additional_package_repositories#Packman); el de los repositorios oficiales no incluye algunos códecs (como H.264 o AAC).
+  Basta con el FFmpeg de los repositorios oficiales: OpenTranscribe solo necesita leer el audio, y ese FFmpeg decodifica AAC, MP3, Opus, Vorbis o FLAC, también dentro de vídeos MP4 o MKV. No hace falta Packman.
 
 - **Ejecutable suelto:** descarga `OpenTranscribe`, dale permisos (`chmod +x OpenTranscribe`) y ejecútalo.
 

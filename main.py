@@ -1018,7 +1018,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         # Crear ventana emergente más grande
         ayuda_window = ctk.CTkToplevel(self)
         ayuda_window.title("Manual de Usuario - OpenTranscribe")
-        ayuda_window.geometry("550x750") # Más alto para que quepa todo
+        ayuda_window.geometry("550x860") # Alto suficiente para logo + manual + contacto
         ayuda_window.resizable(False, True) # Permitir redimensionar alto
         ayuda_window.attributes("-topmost", True)
 
@@ -1064,7 +1064,8 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         # Usamos Textbox en modo lectura para que sea scrollable y copiable
         info_text = ctk.CTkTextbox(ayuda_window, width=500, height=480, corner_radius=10,
                                    fg_color="#232323", text_color="#eeeeee", font=("Consolas", 12))
-        info_text.pack(pady=10, padx=20, fill="both", expand=True)
+        # Se coloca (pack) al final: así, si la ventana es más baja de lo necesario,
+        # encoge el manual (que tiene scroll) y no se cortan el contacto ni Cerrar
 
         # --- CONTENIDO DEL MANUAL ---
         manual = (
@@ -1120,7 +1121,10 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
         # 3. SECCIÓN DE CONTACTO
         frame_contact = ctk.CTkFrame(ayuda_window, fg_color="transparent")
-        frame_contact.pack(pady=10, fill="x")
+        # Botón Cerrar (abajo del todo; se coloca antes que el contacto por ir con side="bottom")
+        ctk.CTkButton(ayuda_window, text="Cerrar", command=ayuda_window.destroy,
+                      fg_color="#333", hover_color="#444", width=100).pack(side="bottom", pady=(5, 20))
+        frame_contact.pack(side="bottom", pady=10, fill="x")
 
         ctk.CTkLabel(frame_contact, text="¿Dudas o Bugs?", font=("Roboto", 12, "bold")).pack()
 
@@ -1134,9 +1138,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         lbl_web.pack()
         lbl_web.bind("<Button-1>", lambda e: webbrowser.open("https://anabasasoft.github.io"))
 
-        # Botón Cerrar
-        ctk.CTkButton(ayuda_window, text="Cerrar", command=ayuda_window.destroy,
-                      fg_color="#333", hover_color="#444", width=100).pack(pady=(5, 20))
+        info_text.pack(pady=10, padx=20, fill="both", expand=True)
 
     def check_system_requirements(self):
         """Verifica dependencias del sistema"""
