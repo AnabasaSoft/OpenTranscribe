@@ -10,7 +10,8 @@ import time
 import re
 from tkinterdnd2 import TkinterDnD, DND_FILES
 from PIL import Image
-import webbrowser
+import settings
+import updater
 import csv
 try:
     from docx import Document
@@ -23,8 +24,14 @@ import platform
 import sys
 import tkinter as tk
 
-APP_VERSION = "3.0.0"
-APP_NAME = f"OpenTranscribe v{APP_VERSION}"
+# La versión la genera el workflow de release a partir del tag (_version.py, que
+# no está en git). Ejecutando desde el código fuente vale "dev" y no se buscan
+# actualizaciones.
+try:
+    from _version import __version__ as APP_VERSION
+except ImportError:
+    APP_VERSION = "dev"
+APP_NAME = "OpenTranscribe (dev)" if APP_VERSION == "dev" else f"OpenTranscribe v{APP_VERSION}"
 
 def resource_path(relative_path):
     """Obtiene la ruta absoluta al recurso, funcione en dev o en PyInstaller"""
@@ -1153,6 +1160,17 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
         ctk.CTkLabel(ayuda_window, text=APP_NAME, font=("Roboto Medium", 20)).pack(pady=5)
 
+        # Actualizaciones: botón manual e interruptor de la comprobación al arrancar
+        frame_updates = ctk.CTkFrame(ayuda_window, fg_color="transparent")
+        frame_updates.pack(pady=(0, 5))
+        btn_updates = ctk.CTkButton(frame_updates, text="🔄 Buscar actualizaciones", width=180, height=28,
+                                    fg_color="#333", hover_color="#444")
+        btn_updates.configure(command=lambda: self.check_updates_manual(btn_updates, ayuda_window))
+        btn_updates.pack(side="left", padx=(0, 15))
+        auto_var = ctk.BooleanVar(value=bool(settings.get("comprobar_actualizaciones")))
+        ctk.CTkCheckBox(frame_updates, text="Buscar al iniciar", variable=auto_var,
+                        command=lambda: settings.set("comprobar_actualizaciones", auto_var.get())).pack(side="left")
+
         # 2. ÁREA DE TEXTO CON SCROLL (Para todo el manual)
         # Usamos Textbox en modo lectura para que sea scrollable y copiable
         info_text = ctk.CTkTextbox(ayuda_window, width=500, height=480, corner_radius=10,
@@ -1226,12 +1244,12 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         # Email Clicable
         lbl_mail = ctk.CTkLabel(frame_contact, text="anabasasoft@gmail.com", text_color="#4da6ff", cursor="hand2")
         lbl_mail.pack()
-        lbl_mail.bind("<Button-1>", lambda e: webbrowser.open("mailto:anabasasoft@gmail.com"))
+        lbl_mail.bind("<Button-1>", lambda e: updater.open_url("mailto:anabasasoft@gmail.com"))
 
         # Web Clicable
         lbl_web = ctk.CTkLabel(frame_contact, text="anabasasoft.github.io", text_color="#4da6ff", cursor="hand2")
         lbl_web.pack()
-        lbl_web.bind("<Button-1>", lambda e: webbrowser.open("https://anabasasoft.github.io"))
+        lbl_web.bind("<Button-1>", lambda e: updater.open_url("https://anabasasoft.github.io"))
 
         info_text.pack(pady=10, padx=20, fill="both", expand=True)
 
@@ -1257,6 +1275,98 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
             self.mostrar_alerta_oscura("Faltan Dependencias", msg)
 
+        # Después del aviso de dependencias, para que no se crucen dos diálogos
+        self.after(2000, self.check_updates_auto)
+
+    # ==========================================================
+    # ACTUALIZACIONES
+    # ==========================================================
+
+    def check_updates_auto(self):
+        """Busca una versión nueva al arrancar, en segundo plano. Los errores (sin red,
+        límite de la API de GitHub...) solo se registran en consola."""
+        if APP_VERSION == "dev":
+            print("Compilación de desarrollo: no se buscan actualizaciones")
+            return
+        if not settings.get("comprobar_actualizaciones"):
+            return
+
+        def worker():
+            try:
+                rel = updater.check_latest(APP_VERSION)
+            except Exception as e:
+                print(f"No se pudo comprobar si hay actualizaciones: {e}")
+                return
+            if rel and rel["tag"] != settings.get("version_omitida"):
+                print(f"Nueva versión disponible: {rel['tag']}")
+                self.run_on_ui(self.show_update_dialog, rel, True)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def check_updates_manual(self, button, parent):
+        """Botón de la Ayuda: avisa aunque esa versión se hubiera omitido."""
+        if APP_VERSION == "dev":
+            self.mostrar_alerta_oscura("Actualizaciones", "Esta es una compilación de desarrollo:\nno se buscan actualizaciones.", parent)
+            return
+        button.configure(state="disabled", text="🔄 Buscando...")
+
+        def worker():
+            try:
+                rel, error = updater.check_latest(APP_VERSION), None
+            except Exception as e:
+                rel, error = None, e
+            self.run_on_ui(done, rel, error)
+
+        def done(rel, error):
+            if button.winfo_exists():
+                button.configure(state="normal", text="🔄 Buscar actualizaciones")
+            if not parent.winfo_exists():
+                return  # Se cerró la Ayuda mientras se buscaba
+            if error:
+                self.mostrar_alerta_oscura("Actualizaciones", f"No se pudo comprobar si hay actualizaciones:\n{error}", parent)
+            elif rel is None:
+                self.mostrar_alerta_oscura("Actualizaciones", f"Ya tienes la última versión ({APP_VERSION}).", parent)
+            else:
+                self.show_update_dialog(rel, False, parent)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def show_update_dialog(self, rel, allow_skip, parent=None):
+        """Avisa de una versión nueva con el enlace a su release.
+        Con allow_skip se ofrece no volver a avisar de esa versión."""
+        padre = parent if parent else self
+        dialog = ctk.CTkToplevel(padre)
+        dialog.title("Nueva versión disponible")
+        dialog.geometry("400x230" if allow_skip else "400x200")
+        dialog.resizable(False, False)
+
+        ctk.CTkLabel(dialog, text=f"Hay una versión nueva de OpenTranscribe: {rel['tag']}\n(tienes la {APP_VERSION}).",
+                     font=("Roboto", 14), wraplength=360).pack(pady=(25, 5), padx=20)
+        lbl_link = ctk.CTkLabel(dialog, text="Ver la versión en GitHub", text_color="#4da6ff", cursor="hand2")
+        lbl_link.pack()
+        lbl_link.bind("<Button-1>", lambda e: updater.open_url(rel["url"]))
+
+        skip_var = ctk.BooleanVar(value=False)
+        if allow_skip:
+            ctk.CTkCheckBox(dialog, text="No volver a avisar de esta versión", variable=skip_var).pack(pady=(15, 0))
+
+        def close(download):
+            if skip_var.get():
+                settings.set("version_omitida", rel["tag"])
+            if download:
+                updater.open_url(rel["url"])
+            dialog.destroy()
+
+        frame_btns = ctk.CTkFrame(dialog, fg_color="transparent")
+        frame_btns.pack(pady=20)
+        ctk.CTkButton(frame_btns, text="Descargar", command=lambda: close(True), width=110).pack(side="left", padx=10)
+        ctk.CTkButton(frame_btns, text="Más tarde", command=lambda: close(False), fg_color="gray",
+                      hover_color="#555", width=110).pack(side="right", padx=10)
+        dialog.protocol("WM_DELETE_WINDOW", lambda: close(False))
+
+        dialog.attributes("-topmost", True)
+        dialog.transient(padre)
+        dialog.update()
+        try: dialog.grab_set()
+        except: pass
     def parse_dropped_files(self, data):
         """Convierte el string de TkinterDnD en una lista de rutas limpias."""
         # Si viene entre corchetes {} (común en Linux/Windows con espacios)

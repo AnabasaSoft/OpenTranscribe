@@ -50,7 +50,22 @@ jobs:
         sudo apt-get install -y cmake g++
         ./build_whisper.sh
 
-    # 6. Crear el Ejecutable (PyInstaller)
+    # 6. Versión: sale del tag y se usa para la app (_version.py) y para los paquetes.
+    #    dpkg y rpm exigen que empiece por un dígito
+    #     (tag "v1.2.0" -> "1.2.0"; lanzado a mano sin tag -> "0.0.0+git<commit>")
+    - name: Package Version
+      run: |
+        if [ "${{ github.ref_type }}" = "tag" ]; then
+          VERSION="${GITHUB_REF_NAME#v}"
+        else
+          VERSION="0.0.0+git${GITHUB_SHA::7}"
+        fi
+        echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+        # La app lee su versión de aquí (no está en git; en local vale "dev")
+        echo "__version__ = \"$VERSION\"" > _version.py
+        echo "Versión del paquete: $VERSION"
+
+    # 6b. Crear el Ejecutable (PyInstaller)
     - name: Build Binary with PyInstaller
       run: |
         # --onedir: con --onefile todo se extraía a /tmp en cada arranque (más lento
@@ -65,18 +80,6 @@ jobs:
           --hidden-import="tkinter" \
           --hidden-import="tkinterdnd2" \
           main.py
-
-    # 6b. Versión del paquete: dpkg y rpm exigen que empiece por un dígito
-    #     (tag "v1.2.0" -> "1.2.0"; lanzado a mano sin tag -> "0.0.0+git<commit>")
-    - name: Package Version
-      run: |
-        if [ "${{ github.ref_type }}" = "tag" ]; then
-          VERSION="${GITHUB_REF_NAME#v}"
-        else
-          VERSION="0.0.0+git${GITHUB_SHA::7}"
-        fi
-        echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-        echo "Versión del paquete: $VERSION"
 
     # 7. Crear estructura de carpetas para el paquete (.deb/.rpm)
     - name: Prepare Package Structure

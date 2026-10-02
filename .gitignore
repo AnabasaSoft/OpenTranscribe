@@ -30,3 +30,6 @@ binaries_linux/whisper-cli
 
 # Roadmap interno (como en MantPro)
 ROADMAP.md
+
+# Versión generada por el workflow a partir del tag
+_version.py

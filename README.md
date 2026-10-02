@@ -24,7 +24,8 @@
 
 ## 🚀 Características
 
-- **100 % local:** el audio nunca sale de tu ordenador. Solo se usa internet para descargar los modelos la primera vez.
+- **100 % local:** el audio nunca sale de tu ordenador. Solo se usa internet para descargar los modelos la primera vez y para comprobar al arrancar si hay una versión nueva (se puede desactivar en Ayuda).
+- **Avisos de actualización:** al publicarse una versión nueva, la app lo indica con un enlace a la descarga.
 - **Audio y vídeo:** MP3, WAV, M4A, MP4, MKV, MOV, AVI, WEBM y FLV. No hace falta extraer el audio antes.
 - **Varios modelos:** desde *Tiny* (muy rápido) hasta *Large* (máxima precisión). Se descargan automáticamente cuando hacen falta.
 - **Exporta a múltiples formatos:** Word (.docx), CSV, SRT, VTT y TXT.
