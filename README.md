@@ -42,7 +42,7 @@
 - **FFmpeg** instalado en el sistema:
   - Debian/Ubuntu: `sudo apt install ffmpeg`
   - Fedora: `sudo dnf install ffmpeg` (desde RPM Fusion)
-  - openSUSE: `sudo zypper install ffmpeg`
+  - openSUSE: `sudo zypper install ffmpeg` (desde Packman, para tener todos los códecs)
 - Para ejecutar desde el código fuente: **Python 3.10+**, `git`, `cmake` y `g++`.
 
 ---
@@ -58,11 +58,16 @@ Descarga el paquete desde [Releases](https://github.com/AnabasaSoft/OpenTranscri
   sudo apt install ./OpenTranscribe-linux-x64.deb
   ```
 
-- **Fedora/openSUSE (.rpm):**
+- **Fedora (.rpm):**
   ```bash
-  sudo dnf install ./OpenTranscribe-linux-x64.rpm      # Fedora
-  sudo zypper install ./OpenTranscribe-linux-x64.rpm   # openSUSE
+  sudo dnf install ./OpenTranscribe-linux-x64.rpm
   ```
+
+- **openSUSE Tumbleweed / Leap (.rpm):**
+  ```bash
+  sudo zypper install ./OpenTranscribe-linux-x64.rpm
+  ```
+  FFmpeg completo está en el repositorio de [Packman](https://en.opensuse.org/Additional_package_repositories#Packman); el de los repositorios oficiales no incluye algunos códecs (como H.264 o AAC).
 
 - **Ejecutable suelto:** descarga `OpenTranscribe`, dale permisos (`chmod +x OpenTranscribe`) y ejecútalo.
 
