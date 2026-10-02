@@ -31,7 +31,7 @@ jobs:
     - name: Install System Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y python3-tk tk-dev libsdl2-dev ffmpeg ruby-full
+        sudo apt-get install -y python3-tk tk-dev libsdl2-dev ffmpeg ruby-full rpm
         # Instalar FPM (para crear .deb y .rpm)
         sudo gem install fpm
 
@@ -53,7 +53,9 @@ jobs:
     # 6. Crear el Ejecutable (PyInstaller)
     - name: Build Binary with PyInstaller
       run: |
-        pyinstaller --noconfirm --onefile --windowed \
+        # --onedir: con --onefile todo se extraía a /tmp en cada arranque (más lento
+        # y no arranca si /tmp está montado con noexec)
+        pyinstaller --noconfirm --onedir --windowed \
           --name "OpenTranscribe" \
           --icon="icon.png" \
           --add-data "binaries_linux:binaries_linux" \
@@ -64,16 +66,32 @@ jobs:
           --hidden-import="tkinterdnd2" \
           main.py
 
+    # 6b. Versión del paquete: dpkg y rpm exigen que empiece por un dígito
+    #     (tag "v1.2.0" -> "1.2.0"; lanzado a mano sin tag -> "0.0.0+git<commit>")
+    - name: Package Version
+      run: |
+        if [ "${{ github.ref_type }}" = "tag" ]; then
+          VERSION="${GITHUB_REF_NAME#v}"
+        else
+          VERSION="0.0.0+git${GITHUB_SHA::7}"
+        fi
+        echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+        echo "Versión del paquete: $VERSION"
+
     # 7. Crear estructura de carpetas para el paquete (.deb/.rpm)
     - name: Prepare Package Structure
       run: |
+        mkdir -p package_root/opt
         mkdir -p package_root/usr/bin
         mkdir -p package_root/usr/share/applications
         mkdir -p package_root/usr/share/pixmaps
 
-        # Copiar el binario compilado
-        cp dist/OpenTranscribe package_root/usr/bin/opentranscribe
-        chmod +x package_root/usr/bin/opentranscribe
+        # La aplicación (carpeta de PyInstaller) en /opt y un enlace en /usr/bin
+        cp -a dist/OpenTranscribe package_root/opt/opentranscribe
+        ln -s /opt/opentranscribe/OpenTranscribe package_root/usr/bin/opentranscribe
+
+        # Carpeta suelta para quien no quiera instalar paquete
+        tar -C dist -czf OpenTranscribe-linux-x64.tar.gz OpenTranscribe
 
         # Copiar el icono al sistema
         cp icon.png package_root/usr/share/pixmaps/opentranscribe.png
@@ -95,17 +113,23 @@ jobs:
         StartupNotify=true
         EOF
 
+    # Dependencias: solo ffmpeg. SDL2 no hace falta: pygame trae la suya y va dentro
+    # del paquete. En el .rpm se pide el fichero /usr/bin/ffmpeg y no un paquete
+    # "ffmpeg", porque cada distro lo llama distinto (Fedora: ffmpeg-free;
+    # RPM Fusion: ffmpeg; openSUSE: ffmpeg-9...) y todos instalan ese fichero.
+
     # 9. Crear paquete .DEB (Debian/Ubuntu/Mint)
     - name: Build DEB Package
       run: |
         fpm -s dir -t deb \
           -n opentranscribe \
-          -v ${{ github.ref_name }} \
+          -v "$VERSION" \
           -a x86_64 \
-          --maintainer "TuNombre <tuemail@ejemplo.com>" \
+          --maintainer "AnabasaSoft <anabasasoft@gmail.com>" \
+          --license "GPL-3.0-or-later" \
+          --url "https://github.com/AnabasaSoft/OpenTranscribe" \
           --description "Transcriptor de audio y video usando Whisper.cpp local." \
           --depends ffmpeg \
-          --depends libsdl2-2.0-0 \
           -C package_root .
 
         # Renombrar para que quede bonito (ej: OpenTranscribe-v1.0.0-linux-x64.deb)
@@ -116,12 +140,13 @@ jobs:
       run: |
         fpm -s dir -t rpm \
           -n opentranscribe \
-          -v ${{ github.ref_name }} \
+          -v "$VERSION" \
           -a x86_64 \
-          --maintainer "TuNombre <tuemail@ejemplo.com>" \
+          --maintainer "AnabasaSoft <anabasasoft@gmail.com>" \
+          --license "GPL-3.0-or-later" \
+          --url "https://github.com/AnabasaSoft/OpenTranscribe" \
           --description "Transcriptor de audio y video usando Whisper.cpp local." \
-          --depends ffmpeg \
-          --depends SDL2 \
+          --depends /usr/bin/ffmpeg \
           --rpm-rpmbuild-define "_build_id_links none" \
           -C package_root .
 
@@ -133,7 +158,7 @@ jobs:
       with:
         name: Linux-Packages
         path: |
-          dist/OpenTranscribe
+          OpenTranscribe-linux-x64.tar.gz
           OpenTranscribe-linux-x64.deb
           OpenTranscribe-linux-x64.rpm
 
@@ -143,6 +168,6 @@ jobs:
       if: startsWith(github.ref, 'refs/tags/')
       with:
         files: |
-          dist/OpenTranscribe
+          OpenTranscribe-linux-x64.tar.gz
           OpenTranscribe-linux-x64.deb
           OpenTranscribe-linux-x64.rpm

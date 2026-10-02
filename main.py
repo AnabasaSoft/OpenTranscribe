@@ -33,6 +33,13 @@ def resource_path(relative_path):
 
     return os.path.join(base_path, relative_path)
 
+def format_duration(seconds):
+    """"MM:SS", o "H:MM:SS" a partir de una hora (con %M:%S, 1 h 05 min salía como "05:00")."""
+    seconds = int(seconds)
+    h, rest = divmod(seconds, 3600)
+    m, s = divmod(rest, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
 SPEAKER_LABEL = re.compile(r"👤 Hablante (\d+|\?): ")
 TIMESTAMP_PATTERN = re.compile(r"\[(\d{2}:\d{2}:\d{2}[\.,]\d{3}) --> (\d{2}:\d{2}:\d{2}[\.,]\d{3})\]")
 
@@ -147,7 +154,14 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         super().__init__()
 
         self.TkdndVersion = TkinterDnD._require(self)
-        pygame.mixer.init()
+        # Sin dispositivo de sonido (o con el servidor de audio caído) init() lanza
+        # pygame.error: la app debe arrancar igual, solo sin reproductor
+        try:
+            pygame.mixer.init()
+            self.audio_ok = True
+        except pygame.error as e:
+            print(f"Reproductor desactivado (sin audio): {e}")
+            self.audio_ok = False
 
         self.title("OpenTranscribe v2.0")
         self.geometry("750x700")
@@ -175,6 +189,10 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.total_duration = 0
         self.current_offset = 0
         self.transcript_segments = []
+        self._slider_job = None  # after() pendiente del refresco del reproductor
+        self._preview_token = 0   # identifica la última carga del reproductor
+        self._preview_file = None # copia en Opus para formatos que pygame no abre
+        transcriber.cleanup_previews()  # restos de una ejecución anterior
 
         self.queue_files = []
         self.is_batch_mode = False
@@ -471,7 +489,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         total_files = len(file_list)
         accumulated_time = 0 # Tiempo acumulado de los archivos ya terminados
 
-        self.append_text(f"Total a procesar: {time.strftime('%H:%M:%S', time.gmtime(total_batch_duration))}\n\n")
+        self.append_text(f"Total a procesar: {format_duration(total_batch_duration)}\n\n")
 
         # 2. BUCLE DE PROCESAMIENTO
         for index, audio_file in enumerate(file_list):
@@ -483,7 +501,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
             # --- ACTUALIZACIÓN VISUAL DEL HEADER ---
             msg_header = f"--- [{index + 1}/{total_files}] PROCESANDO: {file_name} ---\n"
-            msg_header += f"⏱️ Duración: {time.strftime('%M:%S', time.gmtime(current_file_duration))}\n"
+            msg_header += f"⏱️ Duración: {format_duration(current_file_duration)}\n"
 
             # Escribimos en el textbox sin borrar lo anterior para tener un historial
             self.append_text("\n" + msg_header)
@@ -706,22 +724,32 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.sync_timestamps_from_text()
         self.mostrar_alerta_oscura("Sincronizado", "Se han actualizado los tiempos del Karaoke.")
 
+    def start_slider_loop(self):
+        """Arranca el refresco del reproductor sustituyendo el que hubiera programado.
+        Llamar directamente a update_audio_slider_loop en cada seek o reanudación
+        añadía un bucle más cada vez, y se acumulaban."""
+        if self._slider_job:
+            self.after_cancel(self._slider_job)
+        self._slider_job = None
+        self.update_audio_slider_loop()
+
     def update_audio_slider_loop(self):
+        self._slider_job = None
         if self.is_playing and self.total_duration > 0:
             current_time = self.current_offset + (pygame.mixer.music.get_pos() / 1000)
             if current_time > self.total_duration:
                 self.stop_audio()
                 return
             self.slider_audio.set(current_time / self.total_duration)
-            current_str = time.strftime('%M:%S', time.gmtime(int(current_time)))
-            total_str = time.strftime('%M:%S', time.gmtime(self.total_duration))
+            current_str = format_duration(current_time)
+            total_str = format_duration(self.total_duration)
             self.lbl_audio_time.configure(text=f"{current_str} / {total_str}")
             for seg in self.transcript_segments:
                 if seg['start'] <= current_time <= seg['end']:
                     self.textbox._textbox.tag_add("highlight", seg['idx_start'], seg['idx_end'])
                 else:
                     self.textbox._textbox.tag_remove("highlight", seg['idx_start'], seg['idx_end'])
-            self.after(100, self.update_audio_slider_loop)
+            self._slider_job = self.after(100, self.update_audio_slider_loop)
 
     def toggle_audio(self):
         if not self.is_playing:
@@ -733,7 +761,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
                      if not pygame.mixer.music.get_busy(): pygame.mixer.music.play(start=self.current_offset)
                 self.is_playing = True
                 self.btn_play.configure(text="⏸ Pausa", fg_color="#555")
-                self.update_audio_slider_loop()
+                self.start_slider_loop()
             except Exception as e: print(e)
         else:
             pygame.mixer.music.pause()
@@ -836,21 +864,63 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.load_audio_preview()
 
     def load_audio_preview(self):
-        if self.selected_file_path:
+        if not self.selected_file_path: return
+        if not self.audio_ok:
+            self.btn_play.configure(state="disabled", text="▶ Sin audio")
+            return
+        if self.is_playing or pygame.mixer.music.get_busy():
+            self.stop_audio()
+        self.total_duration = transcriber.get_audio_duration(self.selected_file_path)
+        self.slider_audio.set(0)
+        self.current_offset = 0
+        self.is_playing = False
+        self._preview_token += 1
+        try:
+            pygame.mixer.music.load(self.selected_file_path)
+            self._set_preview_file(None)
+            self._preview_ready()
+        except Exception:
+            # pygame no abre AAC ni vídeo (M4A, MP4, MKV...): se extrae el audio con
+            # ffmpeg en segundo plano, porque en archivos largos tarda unos segundos
+            self.btn_play.configure(state="disabled", text="⏳ Preparando...")
+            self.btn_stop.configure(state="disabled")
+            token, source = self._preview_token, self.selected_file_path
+            def worker():
+                path = transcriber.convert_for_preview(source)
+                self.run_on_ui(self._preview_converted, token, path)
+            threading.Thread(target=worker, daemon=True).start()
+
+    def _preview_converted(self, token, path):
+        if token != self._preview_token:
+            # Se cargó otro archivo mientras se convertía este
+            if path and os.path.exists(path): os.remove(path)
+            return
+        if path:
             try:
-                self.total_duration = transcriber.get_audio_duration(self.selected_file_path)
-                pygame.mixer.music.load(self.selected_file_path)
-                self.slider_audio.set(0)
-                self.current_offset = 0
-                self.is_playing = False
-                self.btn_play.configure(state="normal", text="▶ Reproducir", fg_color="#333")
-                self.btn_stop.configure(state="normal")
-                total_str = time.strftime('%M:%S', time.gmtime(self.total_duration))
-                self.lbl_audio_time.configure(text=f"00:00 / {total_str}")
-                self.sync_timestamps_from_text()
+                pygame.mixer.music.load(path)
+                self._set_preview_file(path)
+                self._preview_ready()
+                return
             except Exception as e:
                 print(f"Error cargando audio: {e}")
-                self.btn_play.configure(state="disabled")
+                os.remove(path)
+        self.btn_play.configure(state="disabled", text="▶ No disponible")
+        self.lbl_audio_time.configure(text="Sin vista previa")
+
+    def _set_preview_file(self, path):
+        """Recuerda la copia que está cargada y borra la anterior (pygame ya no la
+        tiene abierta tras el load nuevo). Solo esa: borrar todas las preview_*
+        eliminaría la de una conversión que aún esté en marcha."""
+        old, self._preview_file = self._preview_file, path
+        if old and old != path and os.path.exists(old):
+            os.remove(old)
+
+    def _preview_ready(self):
+        self.btn_play.configure(state="normal", text="▶ Reproducir", fg_color="#333")
+        self.btn_stop.configure(state="normal")
+        total_str = format_duration(self.total_duration)
+        self.lbl_audio_time.configure(text=f"00:00 / {total_str}")
+        self.sync_timestamps_from_text()
 
     def stop_audio(self):
         pygame.mixer.music.stop()
@@ -859,10 +929,11 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.slider_audio.set(0)
         self.textbox._textbox.tag_remove("highlight", "1.0", "end")
         self.btn_play.configure(text="▶ Reproducir", fg_color="#333")
-        total_str = time.strftime('%M:%S', time.gmtime(self.total_duration))
+        total_str = format_duration(self.total_duration)
         self.lbl_audio_time.configure(text=f"00:00 / {total_str}")
 
     def seek_audio(self, value):
+        if not self.audio_ok: return
         if self.total_duration > 0:
             target_time = value * self.total_duration
             self.current_offset = target_time
@@ -871,7 +942,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
             else:
                 self.is_playing = True
                 self.btn_play.configure(text="⏸ Pausa", fg_color="#555")
-                self.update_audio_slider_loop()
+                self.start_slider_loop()
 
     def run_on_ui(self, func, *args):
         """Ejecuta func en el hilo principal. Tkinter no es thread-safe, así que
@@ -960,16 +1031,34 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         ctk.CTkButton(self.dialog, text="Reemplazar Todo", command=ejecutar_reemplazo, fg_color="#1f6aa5").pack(pady=20)
 
     def perform_replace(self, old_text, new_text, parent_window):
-        content = self.textbox.get("0.0", "end")
-        if old_text not in content:
+        # Se reemplaza cada aparición en su sitio. Antes se borraba todo y se volvía
+        # a insertar: se perdía el formato de los hablantes y se añadía una línea en
+        # blanco por uso (get(..., "end") incluye el "\n" final de Tk)
+        tb = self.textbox._textbox
+        match_len = tk.IntVar()
+        pos, total = "1.0", 0
+        while True:
+            pos = tb.search(old_text, pos, stopindex="end", count=match_len)
+            if not pos: break
+            # Mismo formato que el texto sustituido (salvo resaltado del karaoke y selección)
+            tags = tuple(t for t in tb.tag_names(pos) if t not in ("highlight", "sel"))
+            tb.delete(pos, f"{pos}+{match_len.get()}c")
+            # Marca con gravedad derecha: queda tras el texto insertado y la búsqueda
+            # sigue desde ahí (no se vuelve a encontrar si new_text contiene old_text)
+            tb.mark_set("replace_end", pos)
+            tb.mark_gravity("replace_end", "right")
+            tb.insert(pos, new_text, tags)
+            pos = tb.index("replace_end")
+            total += 1
+        tb.mark_unset("replace_end")
+
+        if not total:
             self.mostrar_alerta_oscura("Error", f"No se encontró '{old_text}'", parent_window)
             return
-        new_content = content.replace(old_text, new_text)
-        self.textbox.delete("0.0", "end")
-        self.textbox.insert("0.0", new_content)
         self.mark_as_modified()
         self.sync_timestamps_from_text()
-        self.mostrar_alerta_oscura("Éxito", f"Se reemplazó '{old_text}' por '{new_text}'.", parent_window)
+        veces = "1 vez" if total == 1 else f"{total} veces"
+        self.mostrar_alerta_oscura("Éxito", f"Se reemplazó '{old_text}' por '{new_text}' ({veces}).", parent_window)
 
     def mostrar_alerta_oscura(self, titulo, mensaje, parent_window=None):
         padre = parent_window if parent_window else self
@@ -1012,6 +1101,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         transcriber.stop_transcription()
         try: pygame.mixer.quit()
         except: pass
+        transcriber.cleanup_previews()
         self.destroy()
 
     def abrir_ayuda(self):
@@ -1073,7 +1163,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
             "GUÍA DE FUNCIONES PRINCIPALES\n"
             "============================================\n\n"
 
-            "1. TRANCRIPCIÓN BÁSICA\n"
+            "1. TRANSCRIPCIÓN BÁSICA\n"
             "----------------------\n"
             "• Arrastra un archivo de audio o vídeo a la ventana.\n"
             "• Elige el 'Modelo IA' (Base es recomendado).\n"
@@ -1084,9 +1174,11 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
             "• Arrastra MÚLTIPLES archivos a la vez (ej. 10 vídeos).\n"
             "• La aplicación detectará el modo 'Cola'.\n"
             "• Pulsa 'Procesar Cola'.\n"
-            "• El sistema te preguntará el formato (Word, PDF, etc.).\n"
-            "• Los archivos se guardarán AUTOMÁTICAMENTE en la\n"
-            "  misma carpeta que los originales.\n\n"
+            "• Te preguntará el formato (Word, TXT, SRT o CSV) y la\n"
+            "  carpeta de destino. Si cancelas la carpeta, cada\n"
+            "  archivo se guarda junto a su original.\n"
+            "• Las transcripciones se guardan AUTOMÁTICAMENTE y al\n"
+            "  final verás un resumen (guardados, errores...).\n\n"
 
             "3. SOPORTE MULTIMEDIA 🎬\n"
             "------------------------\n"
@@ -1101,8 +1193,8 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
             "  cada persona en un canal (llamadas, podcasts con un\n"
             "  micro por persona). Izquierdo = Hablante 1,\n"
             "  derecho = Hablante 2. Con audio mono no se aplica.\n"
-            "• Modo Subtítulos: Genera marcas de tiempo exactas\n"
-            "  para crear archivos .SRT o .VTT.\n"
+            "• Modo Subtítulos: Genera marcas de tiempo exactas.\n"
+            "  Necesario para exportar .SRT/.VTT y para el karaoke.\n"
             "• Reproductor Karaoke: Pulsa ▶ para escuchar el audio\n"
             "  y ver cómo se resalta el texto en tiempo real.\n"
             "• Sincronizar: Si editas el texto manualmente, pulsa\n"

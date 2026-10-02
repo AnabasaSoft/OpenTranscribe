@@ -7,6 +7,8 @@ import sys
 import shutil
 import urllib.request
 import ssl
+import glob
+import tempfile
 
 # ==========================================
 # CONFIGURACIÓN DE RUTAS
@@ -30,6 +32,8 @@ MODEL_URLS = {
 current_process = None
 is_cancelled = False
 
+# Línea de --print-progress: "whisper_print_progress_callback: progress =  45%"
+PROGRESS_LINE = re.compile(r"progress =\s*(\d+)%")
 # "[00:00:00.000 --> 00:00:05.000]  " al principio de cada línea de whisper
 SEGMENT_TIMESTAMP = re.compile(r"^\[\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}\]\s*")
 # Marca de --diarize: "(speaker 0)" = canal izquierdo, "(speaker 1)" = derecho,
@@ -185,6 +189,30 @@ def get_audio_channels(file_path):
     n = re.match(r"(\d+) channels", layout)
     return int(n.group(1)) if n else 2  # stereo, 5.1, 7.1... => varios canales
 
+def convert_for_preview(input_path):
+    """Extrae el audio a Opus para el reproductor. pygame (SDL_mixer) no abre AAC
+    ni contenedores de vídeo (M4A, MP4, MKV, MOV...). Devuelve la ruta o None.
+    Archivo propio en cada llamada: no se cruza con TEMP_WAV de la transcripción."""
+    ffmpeg = get_ffmpeg_executable()
+    if not ffmpeg: return None
+    fd, out = tempfile.mkstemp(prefix="preview_", suffix=".opus", dir=APP_DIR)
+    os.close(fd)
+    # Opus ocupa poco (~29 MB por hora); FLAC (siempre incluido en ffmpeg) por si
+    # el ffmpeg del sistema no trae libopus
+    for codec in (["-c:a", "libopus", "-b:a", "64k"], ["-c:a", "flac", "-f", "flac"]):
+        cmd = [ffmpeg, "-i", input_path, "-vn", *codec, "-y", out]
+        r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=system_env())
+        if r.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 0:
+            return out
+    if os.path.exists(out): os.remove(out)
+    return None
+
+def cleanup_previews():
+    """Borra todas las copias de audio del reproductor (al arrancar y al cerrar)."""
+    for f in glob.glob(os.path.join(APP_DIR, "preview_*.opus")):
+        try: os.remove(f)
+        except OSError: pass
+
 def convert_to_wav(input_path, stereo=False):
     ffmpeg = get_ffmpeg_executable()
     if not ffmpeg: raise Exception("No se encontró FFMPEG instalado en el sistema.")
@@ -247,6 +275,9 @@ def run_transcription(input_file, model_selection, callback_text, callback_progr
         strip_timestamps = diarize and not with_timestamps
         if not with_timestamps and not diarize: cmd.append("--no-timestamps")
         if diarize: cmd.append("--diarize")
+        # Progreso por stderr ("progress = NN%"): sin él, en modo sin marcas de
+        # tiempo la barra no se movía hasta el final
+        cmd.append("--print-progress")
 
         # IMPORTANTE: Asegurar permisos de ejecución al vuelo por si acaso
         try:
@@ -268,10 +299,26 @@ def run_transcription(input_file, model_selection, callback_text, callback_progr
         # Con un modelo truncado (descarga a medias) whisper.cpp no falla: lo trata
         # como "modelo vacío de pruebas", no transcribe nada y sale con código 0
         model_empty = False
+        # El progreso llega por dos vías (marcas de tiempo en stdout y --print-progress
+        # en stderr, desde hilos distintos): solo se notifica si avanza
+        progress_lock = threading.Lock()
+        last_progress = 0.0
+        def report_progress(value):
+            nonlocal last_progress
+            value = min(value, 1.0)  # whisper procesa en ventanas de 30 s y la última puede pasar del 100 %
+            with progress_lock:
+                if value <= last_progress: return
+                last_progress = value
+            callback_progress(value)
+
         def drain_stderr():
             nonlocal model_empty
             for err_line in proc.stderr:
                 if "no tensors loaded" in err_line: model_empty = True
+                m = PROGRESS_LINE.search(err_line)
+                if m:
+                    report_progress(int(m.group(1)) / 100)
+                    continue  # no ensuciar stderr_tail, que se usa para los mensajes de error
                 stderr_tail.append(err_line.rstrip())
         stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
         stderr_thread.start()
@@ -287,7 +334,7 @@ def run_transcription(input_file, model_selection, callback_text, callback_progr
                 if match and total_duration > 0:
                     h, m, s = map(float, match.groups())
                     curr = h * 3600 + m * 60 + s
-                    callback_progress(curr / total_duration)
+                    report_progress(curr / total_duration)
                 if "system_info" not in line and "main:" not in line:
                     if diarize:
                         line = format_speakers(line)
