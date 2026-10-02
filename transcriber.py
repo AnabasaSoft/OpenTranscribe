@@ -30,6 +30,19 @@ MODEL_URLS = {
 current_process = None
 is_cancelled = False
 
+# "[00:00:00.000 --> 00:00:05.000]  " al principio de cada línea de whisper
+SEGMENT_TIMESTAMP = re.compile(r"^\[\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}\]\s*")
+# Marca de --diarize: "(speaker 0)" = canal izquierdo, "(speaker 1)" = derecho,
+# "(speaker ?)" = suenan parecido los dos
+SPEAKER_TAG = re.compile(r"\(speaker (\d+|\?)\)\s*")
+
+def format_speakers(line):
+    """Convierte "(speaker 0)" en "👤 Hablante 1: " (y "?" en "Hablante ?")."""
+    def label(m):
+        n = m.group(1)
+        return f"👤 Hablante {int(n) + 1 if n.isdigit() else '?'}: "
+    return SPEAKER_TAG.sub(label, line)
+
 class Cancelled(Exception):
     """El usuario ha cancelado el trabajo en curso."""
 
@@ -146,26 +159,40 @@ def stop_transcription():
         try: proc.kill()
         except: pass
 
-def get_audio_duration(file_path):
+def _ffmpeg_info(file_path):
+    """Salida de "ffmpeg -i" (la información del archivo va por stderr)."""
     ffmpeg = get_ffmpeg_executable()
-    if not ffmpeg: return 0
+    if not ffmpeg: return ""
     try:
-        cmd = [ffmpeg, "-i", file_path]
-        result = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True,
+        result = subprocess.run([ffmpeg, "-i", file_path], stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True,
                                 encoding="utf-8", errors="replace", env=system_env())
-        match = re.search(r"Duration: (\d{2}):(\d{2}):(\d{2}\.\d{2})", result.stderr)
-        if match:
-            h, m, s = map(float, match.groups())
-            return h * 3600 + m * 60 + s
-    except: pass
+        return result.stderr
+    except: return ""
+
+def get_audio_duration(file_path):
+    match = re.search(r"Duration: (\d{2}):(\d{2}):(\d{2}\.\d{2})", _ffmpeg_info(file_path))
+    if match:
+        h, m, s = map(float, match.groups())
+        return h * 3600 + m * 60 + s
     return 0
 
-def convert_to_wav(input_path):
+def get_audio_channels(file_path):
+    """Número de canales de la primera pista de audio (0 si no se sabe)."""
+    match = re.search(r"Audio: [^\n]*?, \d+ Hz, ([^,\n]+)", _ffmpeg_info(file_path))
+    if not match: return 0
+    layout = match.group(1).strip()
+    if layout == "mono": return 1
+    n = re.match(r"(\d+) channels", layout)
+    return int(n.group(1)) if n else 2  # stereo, 5.1, 7.1... => varios canales
+
+def convert_to_wav(input_path, stereo=False):
     ffmpeg = get_ffmpeg_executable()
     if not ffmpeg: raise Exception("No se encontró FFMPEG instalado en el sistema.")
 
     if os.path.exists(TEMP_WAV): os.remove(TEMP_WAV)
-    cmd = [ffmpeg, "-i", input_path, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", "-y", TEMP_WAV]
+    # Estéreo solo para separar hablantes por canal (--diarize lo necesita)
+    channels = "2" if stereo else "1"
+    cmd = [ffmpeg, "-i", input_path, "-ar", "16000", "-ac", channels, "-c:a", "pcm_s16le", "-y", TEMP_WAV]
 
     # Popen (no run) y registrado en current_process para que Cancelar pueda matarlo
     global current_process
@@ -207,10 +234,18 @@ def run_transcription(input_file, model_selection, callback_text, callback_progr
     try:
         if is_cancelled: raise Cancelled()
         total_duration = get_audio_duration(input_file)
-        wav_path = convert_to_wav(input_file)
+        # --diarize compara el volumen de los canales izquierdo y derecho: con audio
+        # mono no tiene sentido (todo saldría como hablante "?")
+        if diarize and get_audio_channels(input_file) == 1:
+            diarize = False
+        wav_path = convert_to_wav(input_file, stereo=diarize)
 
         cmd = [whisper_bin, "-m", model_path, "-f", wav_path, "--language", "auto"]
-        if not with_timestamps: cmd.append("--no-timestamps")
+        # Con --no-timestamps whisper no divide el audio en segmentos y --diarize
+        # devuelve un único bloque con hablante "?". Al separar hablantes se piden
+        # siempre los tiempos y, si el usuario no los quería, se quitan después.
+        strip_timestamps = diarize and not with_timestamps
+        if not with_timestamps and not diarize: cmd.append("--no-timestamps")
         if diarize: cmd.append("--diarize")
 
         # IMPORTANTE: Asegurar permisos de ejecución al vuelo por si acaso
@@ -254,6 +289,10 @@ def run_transcription(input_file, model_selection, callback_text, callback_progr
                     curr = h * 3600 + m * 60 + s
                     callback_progress(curr / total_duration)
                 if "system_info" not in line and "main:" not in line:
+                    if diarize:
+                        line = format_speakers(line)
+                    if strip_timestamps:
+                        line = SEGMENT_TIMESTAMP.sub("", line)
                     callback_text(line)
 
         if is_cancelled: raise Cancelled()

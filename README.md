@@ -11,7 +11,7 @@ Una aplicación de escritorio moderna y oscura para transcribir audio a texto ut
 ## Características 🚀
 - **Interfaz "Dark Mode"** profesional con CustomTkinter.
 - **Transcribe a múltiples formatos:** Word (.docx), CSV, SRT, VTT y TXT.
-- **Diarización:** Detección experimental de hablantes.
+- **Hablantes por canal:** En grabaciones estéreo con cada persona en un canal (llamadas, podcasts), identifica quién habla (izquierdo = Hablante 1, derecho = Hablante 2).
 - **Ligero:** Utiliza `whisper.cpp` para un rendimiento alto y bajo consumo de memoria.
 - **Editor Karaoke:** Reproductor integrado que resalta el texto mientras se escucha.
 

@@ -33,6 +33,7 @@ def resource_path(relative_path):
 
     return os.path.join(base_path, relative_path)
 
+SPEAKER_LABEL = re.compile(r"👤 Hablante (\d+|\?): ")
 TIMESTAMP_PATTERN = re.compile(r"\[(\d{2}:\d{2}:\d{2}[\.,]\d{3}) --> (\d{2}:\d{2}:\d{2}[\.,]\d{3})\]")
 
 def parse_transcript(raw_content):
@@ -237,7 +238,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.frame_switches = ctk.CTkFrame(self.frame_settings, fg_color="transparent")
         self.frame_switches.pack(side="right")
 
-        self.switch_diarize = ctk.CTkSwitch(self.frame_switches, text="Detectar Hablantes 👥") # <--- NUEVO
+        self.switch_diarize = ctk.CTkSwitch(self.frame_switches, text="Hablantes por canal 👥")
         self.switch_diarize.pack(side="left", padx=(0, 15))
 
         self.switch_srt = ctk.CTkSwitch(self.frame_switches, text="Modo Subtítulos")
@@ -419,6 +420,15 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
             input_file = self.selected_file_path
             if not input_file: return
 
+            # La separación de hablantes compara los canales izquierdo y derecho
+            if diarize_mode and transcriber.get_audio_channels(input_file) == 1:
+                seguir = self.mostrar_confirmacion_oscura(
+                    "Audio mono",
+                    "Este audio es mono: no se pueden separar hablantes por canal.\n¿Transcribir sin separar hablantes?",
+                    texto_si="Continuar", texto_no="Cancelar")
+                if not seguir: return
+                diarize_mode = False
+
             if not exists:
                 msg = f"El modelo '{filename_model}' no está descargado.\n¿Deseas descargarlo ahora?"
                 resp = self.mostrar_confirmacion_oscura("Modelo Faltante", msg)
@@ -506,6 +516,9 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
             # --- EJECUCIÓN ---
             # Acumulamos solo el texto de este archivo para el guardado
             text_parts = []
+
+            if diarize_mode and transcriber.get_audio_channels(audio_file) == 1:
+                self.append_text("ℹ️ Audio mono: se transcribe sin separar hablantes\n")
 
             error = transcriber.run_transcription(
                 audio_file,
@@ -650,36 +663,23 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
             self.title("OpenTranscribe * (Terminado, sin guardar)")
 
     def parse_and_insert_line(self, text_line):
-        # Limpiamos posibles espacios extra
-        clean_line = text_line
-
-        # Detectamos patrón de hablante [SPEAKER_00] o (SPEAKER_00)
-        # Regex busca: (cualquier cosa antes)(SPEAKER_XX)(resto del texto)
-        pattern = re.compile(r"(.*)(\[SPEAKER_\d+\]|\(SPEAKER_\d+\))(.*)")
-        match = pattern.search(clean_line)
+        # transcriber ya convierte "(speaker 0)" en "👤 Hablante 1: "; aquí solo
+        # se colorea esa etiqueta
+        match = SPEAKER_LABEL.search(text_line)
 
         if match:
-            # Si encontramos hablante, lo formateamos bonito
-            prefix = match.group(1) # Tiempos si los hay
-            speaker_tag = match.group(2) # El tag feo
-            content = match.group(3) # Lo que dicen
+            # Insertamos lo anterior (tiempos, si los hay) normal
+            self.textbox.insert("end", text_line[:match.start()])
 
-            # Extraemos solo el número
-            num = "".join(filter(str.isdigit, speaker_tag))
-            formatted_speaker = f" 👤 Hablante {int(num) + 1}: " # +1 para que empiece en 1, no en 0
+            # Hablante en azul y negrita. Se configura en el Text interno porque
+            # CTkTextbox.tag_config no admite "font"
+            self.textbox._textbox.tag_config("speaker", foreground="#4da6ff", font=("Roboto", 14, "bold"))
+            self.textbox.insert("end", match.group(0), "speaker")
 
-            # Insertamos el prefijo (tiempos) normal
-            self.textbox.insert("end", prefix)
-
-            # Insertamos el hablante con COLOR y NEGRITA (simulada con tags)
-            self.textbox.tag_config(f"speaker_{num}", foreground="#4da6ff", font=("Roboto", 14, "bold")) # Azul claro
-            self.textbox.insert("end", formatted_speaker, f"speaker_{num}")
-
-            # Insertamos el contenido normal
-            self.textbox.insert("end", content + "\n")
+            # Lo que dicen (ya trae su salto de línea)
+            self.textbox.insert("end", text_line[match.end():])
         else:
-            # Si no hay hablante, insertamos normal
-            self.textbox.insert("end", clean_line)
+            self.textbox.insert("end", text_line)
 
         self.textbox.see("end")
 
@@ -1096,8 +1096,10 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
             "4. HERRAMIENTAS INTELIGENTES\n"
             "----------------------------\n"
-            "• Detectar Hablantes 👥: Intenta distinguir quién habla\n"
-            "  (Hablante 1, Hablante 2...).\n"
+            "• Hablantes por canal 👥: Para grabaciones ESTÉREO con\n"
+            "  cada persona en un canal (llamadas, podcasts con un\n"
+            "  micro por persona). Izquierdo = Hablante 1,\n"
+            "  derecho = Hablante 2. Con audio mono no se aplica.\n"
             "• Modo Subtítulos: Genera marcas de tiempo exactas\n"
             "  para crear archivos .SRT o .VTT.\n"
             "• Reproductor Karaoke: Pulsa ▶ para escuchar el audio\n"
