@@ -56,7 +56,11 @@ Una aplicación de escritorio moderna y oscura para transcribir audio a texto ut
    pip install -r requirements.txt
    ```
 
-3. (Opcional) Compila whisper.cpp si no usas el binario predeterminado.
+3. Compila el motor de transcripción (necesita `git`, `cmake` y `g++`):
+   ```bash
+   ./build_whisper.sh
+   ```
+   Genera `binaries_linux/whisper-cli` a partir de whisper.cpp.
 
 ## Uso ▶️
 

@@ -192,7 +192,9 @@ def run_transcription(input_file, model_selection, callback_text, callback_progr
 
     # Verificación estricta: Si no está el binario, es error crítico
     if not whisper_bin:
-        return fail("[ERROR CRÍTICO] No se encontró el archivo 'whisper-cli' interno.\nReinstala la aplicación.")
+        if getattr(sys, 'frozen', False):
+            return fail("[ERROR CRÍTICO] No se encontró el archivo 'whisper-cli' interno.\nReinstala la aplicación.")
+        return fail("[ERROR CRÍTICO] No existe binaries_linux/whisper-cli.\nCompílalo con ./build_whisper.sh")
 
     filename = get_model_filename(model_selection)
     model_path = get_model_path(filename)
@@ -217,8 +219,10 @@ def run_transcription(input_file, model_selection, callback_text, callback_progr
             os.chmod(whisper_bin, st.st_mode | 0o111) # +x
         except: pass
 
+        # whisper-cli es estático (build_whisper.sh) y solo usa la glibc del sistema:
+        # mismo entorno limpio que ffmpeg
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
-                                encoding="utf-8", errors="replace")
+                                encoding="utf-8", errors="replace", env=system_env())
         current_process = proc
         if is_cancelled: proc.kill()  # cancelado entre ffmpeg y whisper
 

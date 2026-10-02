@@ -23,3 +23,7 @@ Thumbs.db
 .serena/
 .claude/
 *.md
+
+# whisper-cli se compila con build_whisper.sh (en local y en CI)
+.whisper-build/
+binaries_linux/whisper-cli
