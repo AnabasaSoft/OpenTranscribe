@@ -23,6 +23,9 @@ import platform
 import sys
 import tkinter as tk
 
+APP_VERSION = "3.0.0"
+APP_NAME = f"OpenTranscribe v{APP_VERSION}"
+
 def resource_path(relative_path):
     """Obtiene la ruta absoluta al recurso, funcione en dev o en PyInstaller"""
     try:
@@ -163,7 +166,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
             print(f"Reproductor desactivado (sin audio): {e}")
             self.audio_ok = False
 
-        self.title("OpenTranscribe v2.0")
+        self.title(APP_NAME)
         self.geometry("750x700")
 
         try:
@@ -604,7 +607,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.progress_bar.configure(mode="determinate")
         self.progress_bar.set(0)
         self.unsaved_changes = True
-        self.title("OpenTranscribe v2.0 Pro * (Trabajando)")
+        self.title(f"{APP_NAME} * (Trabajando)")
 
     def download_and_transcribe(self, filename, srt_mode, diarize_mode, model_name_ui, is_batch=False, batch_args=None, input_file=None):
         """Descarga el modelo y encadena la transcripción automáticamente (Individual o Cola)."""
@@ -1006,7 +1009,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
             # 5. FINALIZACIÓN
             self.unsaved_changes = False
-            self.title("OpenTranscribe v2.0 Pro")
+            self.title(APP_NAME)
             self.mostrar_alerta_oscura("Guardado", f"Archivo guardado exitosamente:\n{os.path.basename(filename)}")
 
         except Exception as e:
@@ -1148,7 +1151,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
         except Exception as e:
             print(f"ERROR cargando el logo: {e}")
 
-        ctk.CTkLabel(ayuda_window, text="OpenTranscribe v2.0", font=("Roboto Medium", 20)).pack(pady=5)
+        ctk.CTkLabel(ayuda_window, text=APP_NAME, font=("Roboto Medium", 20)).pack(pady=5)
 
         # 2. ÁREA DE TEXTO CON SCROLL (Para todo el manual)
         # Usamos Textbox en modo lectura para que sea scrollable y copiable
@@ -1345,7 +1348,7 @@ class OpenTranscribeApp(ctk.CTk, TkinterDnD.DnDWrapper):
             # Reseteamos las variables internas
             self.transcript_segments = []
             self.unsaved_changes = False
-            self.title("OpenTranscribe v2.0")
+            self.title(APP_NAME)
             print("Texto limpiado correctamente.")
 
 if __name__ == "__main__":
