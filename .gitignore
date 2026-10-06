@@ -32,4 +32,4 @@ binaries_linux/whisper-cli
 ROADMAP.md
 
 # Versión generada por el workflow a partir del tag
-_version.py
+opentranscribe_version.py

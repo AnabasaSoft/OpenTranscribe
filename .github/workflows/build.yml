@@ -50,7 +50,7 @@ jobs:
         sudo apt-get install -y cmake g++
         ./build_whisper.sh
 
-    # 6. Versión: sale del tag y se usa para la app (_version.py) y para los paquetes.
+    # 6. Versión: sale del tag y se usa para la app (opentranscribe_version.py) y para los paquetes.
     #    dpkg y rpm exigen que empiece por un dígito
     #     (tag "v1.2.0" -> "1.2.0"; lanzado a mano sin tag -> "0.0.0+git<commit>")
     - name: Package Version
@@ -62,7 +62,7 @@ jobs:
         fi
         echo "VERSION=$VERSION" >> "$GITHUB_ENV"
         # La app lee su versión de aquí (no está en git; en local vale "dev")
-        echo "__version__ = \"$VERSION\"" > _version.py
+        echo "__version__ = \"$VERSION\"" > opentranscribe_version.py
         echo "Versión del paquete: $VERSION"
 
     # 6b. Crear el Ejecutable (PyInstaller)

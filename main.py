@@ -24,11 +24,13 @@ import platform
 import sys
 import tkinter as tk
 
-# La versión la genera el workflow de release a partir del tag (_version.py, que
-# no está en git). Ejecutando desde el código fuente vale "dev" y no se buscan
-# actualizaciones.
+# La versión la genera el workflow de release a partir del tag
+# (opentranscribe_version.py, que no está en git). Ejecutando desde el código
+# fuente vale "dev" y no se buscan actualizaciones.
+# Nombre propio y no "_version": en openSUSE, el paquete de Pillow añade la
+# carpeta PIL al sys.path y su _version.py se importaría en su lugar.
 try:
-    from _version import __version__ as APP_VERSION
+    from opentranscribe_version import __version__ as APP_VERSION
 except ImportError:
     APP_VERSION = "dev"
 APP_NAME = "OpenTranscribe (dev)" if APP_VERSION == "dev" else f"OpenTranscribe v{APP_VERSION}"
