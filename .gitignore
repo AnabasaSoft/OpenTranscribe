@@ -24,6 +24,8 @@ Thumbs.db
 .claude/
 *.md
 !README.md
+!README.es.md
+!README.eus.md
 # whisper-cli se compila con build_whisper.sh (en local y en CI)
 .whisper-build/
 binaries_linux/whisper-cli

@@ -1,3 +1,5 @@
+🌐 **English** · [Español](README.es.md) · [Euskara](README.eus.md)
+
 # OpenTranscribe 🎙️
 
 <p align="center">
@@ -5,54 +7,56 @@
 </p>
 
 <p align="center">
-  <strong>Transcribe audio y vídeo a texto en tu propio ordenador, sin conexión y sin enviar nada a la nube, con la potencia de Whisper (C++).</strong>
+  <strong>Transcribe audio and video to text on your own computer, offline and without sending anything to the cloud, powered by Whisper (C++).</strong>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10+-blue.svg" alt="Python">
   <img src="https://img.shields.io/badge/License-GPL%20v3-blue.svg" alt="License">
   <img src="https://img.shields.io/badge/Platform-Linux-lightgrey.svg" alt="Platform">
-  <img src="https://img.shields.io/badge/Motor-whisper.cpp-success.svg" alt="whisper.cpp">
-  <img src="https://img.shields.io/badge/Privacidad-100%25%20local-orange.svg" alt="100% local">
+  <img src="https://img.shields.io/badge/Engine-whisper.cpp-success.svg" alt="whisper.cpp">
+  <img src="https://img.shields.io/badge/Privacy-100%25%20local-orange.svg" alt="100% local">
 </p>
 
 <p align="center">
-  <img src="Captura.png" alt="Captura de pantalla"/>
+  <img src="Captura.png" alt="Screenshot"/>
 </p>
 
 ---
 
-## 🚀 Características
+## 🚀 Features
 
-- **100 % local:** el audio nunca sale de tu ordenador. Solo se usa internet para descargar los modelos la primera vez y para comprobar al arrancar si hay una versión nueva (se puede desactivar en Ayuda).
-- **Avisos de actualización:** al publicarse una versión nueva, la app lo indica con un enlace a la descarga.
-- **Audio y vídeo:** MP3, WAV, M4A, MP4, MKV, MOV, AVI, WEBM y FLV. No hace falta extraer el audio antes.
-- **Varios modelos:** desde *Tiny* (muy rápido) hasta *Large* (máxima precisión). Se descargan automáticamente cuando hacen falta.
-- **Exporta a múltiples formatos:** Word (.docx), CSV, SRT, VTT y TXT.
-- **Modo cola:** arrastra varios archivos a la vez y se transcriben y guardan uno tras otro automáticamente.
-- **Hablantes por canal:** en grabaciones estéreo con cada persona en un canal (llamadas, podcasts), identifica quién habla (izquierdo = Hablante 1, derecho = Hablante 2).
-- **Editor Karaoke:** reproductor integrado que resalta el texto mientras se escucha.
-- **Buscar y reemplazar** para corregir la transcripción antes de guardarla.
-- **Interfaz oscura** con CustomTkinter y arrastrar y soltar archivos.
+- **100% local:** your audio never leaves your computer. The internet is only used to download the models the first time and to check for a new version at startup (this can be turned off in Help).
+- **Update notices:** when a new version is released, the app tells you and links to the download.
+- **Audio and video:** MP3, WAV, M4A, MP4, MKV, MOV, AVI, WEBM and FLV. No need to extract the audio first.
+- **Several models:** from *Tiny* (very fast) to *Large* (maximum accuracy). They are downloaded automatically when needed.
+- **Export to multiple formats:** Word (.docx), CSV, SRT, VTT and TXT.
+- **Queue mode:** drag several files at once and they are transcribed and saved one after another automatically.
+- **Speakers by channel:** in stereo recordings with each person on a separate channel (calls, podcasts), it identifies who is speaking (left = Speaker 1, right = Speaker 2).
+- **Karaoke editor:** built-in player that highlights the text as you listen.
+- **Find and replace** to correct the transcription before saving it.
+- **Dark interface** built with CustomTkinter, with drag and drop for files.
+
+> The interface is currently in Spanish; button names below are quoted as they appear in the app, followed by their English meaning.
 
 ---
 
-## 🛠️ Requisitos
+## 🛠️ Requirements
 
-- **Linux x86-64** con un procesador compatible con AVX2 (prácticamente cualquiera desde 2013-2015).
-- **FFmpeg** instalado en el sistema:
+- **Linux x86-64** with an AVX2-capable processor (practically any from 2013-2015 onwards).
+- **FFmpeg** installed on the system:
   - Debian/Ubuntu: `sudo apt install ffmpeg`
-  - Fedora: `sudo dnf install ffmpeg` (desde RPM Fusion)
-  - openSUSE: `sudo zypper install ffmpeg` (el de los repositorios oficiales es suficiente)
-- Para ejecutar desde el código fuente: **Python 3.10+**, `git`, `cmake` y `g++`.
+  - Fedora: `sudo dnf install ffmpeg` (from RPM Fusion)
+  - openSUSE: `sudo zypper install ffmpeg` (the one in the official repositories is enough)
+- To run from source: **Python 3.10+**, `git`, `cmake` and `g++`.
 
 ---
 
-## 📦 Instalación
+## 📦 Installation
 
-### Desde paquetes precompilados
+### From prebuilt packages
 
-Descarga el paquete desde [Releases](https://github.com/AnabasaSoft/OpenTranscribe/releases):
+Download the package from [Releases](https://github.com/AnabasaSoft/OpenTranscribe/releases):
 
 - **Debian/Ubuntu (.deb):**
   ```bash
@@ -68,123 +72,123 @@ Descarga el paquete desde [Releases](https://github.com/AnabasaSoft/OpenTranscri
   ```bash
   sudo zypper install ./OpenTranscribe-linux-x64.rpm
   ```
-  Basta con el FFmpeg de los repositorios oficiales: OpenTranscribe solo necesita leer el audio, y ese FFmpeg decodifica AAC, MP3, Opus, Vorbis o FLAC, también dentro de vídeos MP4 o MKV. No hace falta Packman.
+  The FFmpeg from the official repositories is enough: OpenTranscribe only needs to read the audio, and that FFmpeg decodes AAC, MP3, Opus, Vorbis and FLAC, including inside MP4 or MKV videos. Packman is not needed.
 
-- **AppImage (cualquier distribución, sin instalar):**
+- **AppImage (any distribution, no installation):**
   ```bash
   chmod +x OpenTranscribe-x86_64.AppImage
   ./OpenTranscribe-x86_64.AppImage
   ```
-  Un solo archivo que funciona en cualquier distribución. Solo necesita tener **FFmpeg** instalado.
-  Si tu sistema no tiene FUSE (poco habitual en escritorio), ejecútala con `./OpenTranscribe-x86_64.AppImage --appimage-extract-and-run`.
+  A single file that works on any distribution. It only needs **FFmpeg** to be installed.
+  If your system does not have FUSE (uncommon on desktops), run it with `./OpenTranscribe-x86_64.AppImage --appimage-extract-and-run`.
 
-- **Carpeta comprimida (sin instalar):**
+- **Compressed folder (no installation):**
   ```bash
   tar xzf OpenTranscribe-linux-x64.tar.gz
   ./OpenTranscribe/OpenTranscribe
   ```
 
-Los paquetes funcionan en distribuciones con glibc 2.35 o superior (Ubuntu 22.04, Debian 12, Fedora 36, openSUSE Leap 15.6 o posteriores).
+The packages work on distributions with glibc 2.35 or later (Ubuntu 22.04, Debian 12, Fedora 36, openSUSE Leap 15.6 or newer).
 
-### Desde el código fuente
+### From source
 
-1. Clona el repositorio:
+1. Clone the repository:
    ```bash
    git clone https://github.com/AnabasaSoft/OpenTranscribe.git
    cd OpenTranscribe
    ```
 
-2. Instala las dependencias:
+2. Install the dependencies:
    ```bash
    pip install -r requirements.txt
    ```
 
-3. Compila el motor de transcripción:
+3. Build the transcription engine:
    ```bash
    ./build_whisper.sh
    ```
-   Genera `binaries_linux/whisper-cli` a partir de whisper.cpp.
+   This generates `binaries_linux/whisper-cli` from whisper.cpp.
 
 ---
 
-## ▶️ Uso
+## ▶️ Usage
 
 ```bash
 python main.py
 ```
 
-1. Arrastra un archivo de audio o vídeo a la ventana (o pulsa **📂 Seleccionar Audio**).
-2. Elige el **modelo IA**. *Base* es un buen equilibrio entre velocidad y precisión.
-3. Activa **Modo Subtítulos** si quieres marcas de tiempo (necesarias para SRT/VTT y para el karaoke).
-4. Pulsa **TRANSCRIBIR** y, al terminar, **💾 Guardar Texto**.
+1. Drag an audio or video file onto the window (or click **📂 Seleccionar Audio** — Select audio).
+2. Choose the **AI model**. *Base* is a good balance between speed and accuracy.
+3. Turn on **Modo Subtítulos** (Subtitle mode) if you want timestamps (needed for SRT/VTT and for karaoke).
+4. Click **TRANSCRIBIR** (Transcribe) and, when it finishes, **💾 Guardar Texto** (Save text).
 
-Si arrastras **varios archivos**, se activa el modo cola: eliges una vez el formato y la carpeta de destino, y cada transcripción se guarda automáticamente.
+If you drag **several files**, queue mode is activated: you choose the format and destination folder once, and each transcription is saved automatically.
 
-Los modelos se guardan en `~/.OpenTranscribe/models/`.
-
----
-
-## 📄 Licencia
-
-Este proyecto está bajo la **GNU General Public License v3.0 (GPL-3.0)**.
-Ver el archivo `LICENSE` para el texto completo.
-
-Copyright (C) 2025-2026 AnabasaSoft
-
-### Qué significa en la práctica
-
-- ✅ Puedes **usar** OpenTranscribe libremente, también en tu empresa y con fines comerciales
-- ✅ Puedes **estudiar, modificar y redistribuir** el código
-- ⚠️ Si distribuyes una versión modificada, debes publicarla **también bajo GPL-3.0** y facilitar su código fuente
-- ⚠️ Debes mantener los avisos de copyright y licencia
-
-### Aviso de licencia
-
-```
-OpenTranscribe - Transcripción local de audio y vídeo
-Copyright (C) 2025-2026 AnabasaSoft
-
-Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo
-los términos de la Licencia Pública General de GNU publicada por la Free
-Software Foundation, ya sea la versión 3 de la Licencia o (a tu elección)
-cualquier versión posterior.
-
-Este programa se distribuye con la esperanza de que sea útil, pero SIN
-NINGUNA GARANTÍA; ni siquiera la garantía implícita de COMERCIABILIDAD o
-IDONEIDAD PARA UN PROPÓSITO PARTICULAR. Consulta la Licencia Pública
-General de GNU para más detalles.
-
-Deberías haber recibido una copia de la Licencia Pública General de GNU
-junto con este programa. Si no, consulta <https://www.gnu.org/licenses/>.
-```
-
-> **Nota sobre licencias comerciales**: AnabasaSoft es el titular único del
-> copyright de OpenTranscribe y, por tanto, puede ofrecer el mismo código bajo
-> condiciones distintas a la GPL. Si necesitas integrar OpenTranscribe en un
-> producto propietario, ponte en contacto.
+Models are stored in `~/.OpenTranscribe/models/`.
 
 ---
 
-## 📧 Contacto
+## 📄 License
+
+This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**.
+See the `LICENSE` file for the full text.
+
+Copyright (C) 2025-2026 AnabasaSoft
+
+### What it means in practice
+
+- ✅ You can **use** OpenTranscribe freely, including in your company and for commercial purposes
+- ✅ You can **study, modify and redistribute** the code
+- ⚠️ If you distribute a modified version, you must release it **under GPL-3.0 as well** and provide its source code
+- ⚠️ You must keep the copyright and license notices
+
+### License notice
+
+```
+OpenTranscribe - Local audio and video transcription
+Copyright (C) 2025-2026 AnabasaSoft
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+```
+
+> **Note on commercial licenses**: AnabasaSoft is the sole copyright holder
+> of OpenTranscribe and can therefore offer the same code under terms other
+> than the GPL. If you need to integrate OpenTranscribe into a proprietary
+> product, get in touch.
+
+---
+
+## 📧 Contact
 
 **AnabasaSoft**
 
 - 📧 Email: [anabasasoft@gmail.com](mailto:anabasasoft@gmail.com)
 - 🌐 GitHub: [github.com/AnabasaSoft](https://github.com/AnabasaSoft)
-- 💼 Proyecto: [github.com/AnabasaSoft/OpenTranscribe](https://github.com/AnabasaSoft/OpenTranscribe)
+- 💼 Project: [github.com/AnabasaSoft/OpenTranscribe](https://github.com/AnabasaSoft/OpenTranscribe)
 
 ---
 
-## 🙏 Agradecimientos
+## 🙏 Acknowledgements
 
-- [whisper.cpp](https://github.com/ggml-org/whisper.cpp): motor de transcripción en C/C++ basado en Whisper de OpenAI
-- [FFmpeg](https://ffmpeg.org/): conversión y lectura de audio y vídeo
-- [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter): interfaz gráfica moderna sobre Tkinter
-- [tkinterdnd2](https://github.com/Eliav2/tkinterdnd2): arrastrar y soltar archivos
-- [pygame](https://www.pygame.org/): reproducción de audio para el modo karaoke
-- [python-docx](https://github.com/python-openxml/python-docx): exportación a Word
-- [Pillow](https://python-pillow.org/): tratamiento de imágenes
-- La comunidad open source, por su apoyo y sus contribuciones
+- [whisper.cpp](https://github.com/ggml-org/whisper.cpp): C/C++ transcription engine based on OpenAI's Whisper
+- [FFmpeg](https://ffmpeg.org/): audio and video conversion and decoding
+- [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter): modern graphical interface on top of Tkinter
+- [tkinterdnd2](https://github.com/Eliav2/tkinterdnd2): file drag and drop
+- [pygame](https://www.pygame.org/): audio playback for karaoke mode
+- [python-docx](https://github.com/python-openxml/python-docx): Word export
+- [Pillow](https://python-pillow.org/): image processing
+- The open source community, for its support and contributions
 
 ---
 
@@ -192,11 +196,11 @@ junto con este programa. Si no, consulta <https://www.gnu.org/licenses/>.
 
 <img src="https://raw.githubusercontent.com/AnabasaSoft/MantPro/main/AnabasaSoft.png" alt="Anabasa Software" width="120"/>
 
-**Desarrollado con ❤️ por [Anabasa Software](https://anabasasoft.github.io)**
+**Made with ❤️ by [Anabasa Software](https://anabasasoft.github.io)**
 
-📧 Email: [anabasasoft@gmail.com](mailto:anabasasoft@gmail.com) • 🌐 Portafolio: [anabasasoft.github.io](https://anabasasoft.github.io)
+📧 Email: [anabasasoft@gmail.com](mailto:anabasasoft@gmail.com) • 🌐 Portfolio: [anabasasoft.github.io](https://anabasasoft.github.io)
 
-⭐ Si te gusta este proyecto, dale una estrella en GitHub
+⭐ If you like this project, give it a star on GitHub
 
 </div>
 
